@@ -1,10 +1,10 @@
 {
-  "name": "role-name-injector",
-  "version": "1.0.0",
+  "name": "role-prompter",
+  "version": "1.1.0",
   "private": true,
-  "description": "SillyTavern 角色名注入：悬浮面板管理角色名条目，点击注入输入框并定位光标",
+  "description": "角色提词器：SillyTavern 悬浮面板，点条目把角色名/台词格式注入输入框并定位光标",
   "scripts": {
-    "test": "node test/test-parser.js && node test/test-inject.js",
+    "test": "node test/test-parser.js && node test/test-inject.js && node test/test-modal.js",
     "build": "node build.js",
     "check": "node --check src/角色提词器.js"
   },

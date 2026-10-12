@@ -19,7 +19,7 @@
 
   /* ==================== 常量 ==================== */
 
-  const SCRIPT_VERSION = '1.1.0';
+  const SCRIPT_VERSION = '1.1.1';
   const BUTTON_NAME = '角色提词器';
   const STORE_KEY = '角色提词器';
   // v1.0.0 时叫「角色名注入」，改名的同时把老数据搬过来（读到这里时会自动迁移）
@@ -306,6 +306,7 @@
     editingId: null,
     lastClosedAt: 0,
     openModalEl: null,
+    openModalToken: 0,           // 当前弹窗的令牌，closeModal 靠它避免关错弹窗
     openModalOnClose: null,
   };
 
@@ -335,6 +336,7 @@
     }
   }
 
+  /* __EL_SLICE_START__ */
   function el(tag, attrs, children) {
     const node = doc.createElement(tag);
     if (attrs) {
@@ -358,6 +360,7 @@
     }
     return node;
   }
+  /* __EL_SLICE_END__ */
 
   // 统一登记注册在酒馆页面上的监听，卸载时一次性摘除，避免脚本停用后残留
   const pageListeners = [];
@@ -939,9 +942,23 @@
   }
 
   /* ==================== 弹窗 ==================== */
+  /* __MODAL_SLICE_START__ */
 
+  let modalSeq = 0;              // 弹窗令牌自增源
+
+  /**
+   * 弹出弹窗。
+   *
+   * 关于令牌：`closeModal()` 只关「令牌匹配」的那一个弹窗。
+   * 原因是一个真实踩过的时序坑——按钮处理器里 `await b.onClick()` 之后才调
+   * closeModal，而 onClick 里 resolve 的 Promise 续体是更早入队的微任务，
+   * 于是续体可能已经弹出了下一个弹窗、`state.openModalEl` 已经指向新弹窗，
+   * 这时无令牌的 closeModal 会把**新弹窗**关掉。串联确认（清空数据的三次确认）
+   * 正是这种模式，表现为"点继续等于取消"。
+   */
   function showModal({ title, contentEl, buttons, wide, onClose }) {
     closeModal();
+    const token = ++modalSeq;
     const box = el('div', { class: 'rpt-modal' }, [
       el('h3', { text: title }),
       contentEl || null,
@@ -966,7 +983,7 @@
             ok = false;
           }
         }
-        if (ok !== false) closeModal();
+        if (ok !== false) closeModal(token);
       });
       actions.appendChild(btn);
     }
@@ -974,23 +991,29 @@
     if (buttonList.length) box.appendChild(actions);
 
     const mask = el('div', { class: 'rpt-modal-mask' }, box);
-    mask.addEventListener('mousedown', (e) => { if (e.target === mask) closeModal(); });
+    mask.addEventListener('mousedown', (e) => { if (e.target === mask) closeModal(token); });
     doc.body.appendChild(mask);
     applyTheme(box);
     state.openModalEl = mask;
+    state.openModalToken = token;
     state.openModalOnClose = typeof onClose === 'function' ? onClose : null;
     return mask;
   }
 
-  function closeModal() {
-    if (state.openModalEl) {
-      const cb = state.openModalOnClose;
-      state.openModalEl.remove();
-      state.openModalEl = null;
-      state.openModalOnClose = null;
-      if (cb) {
-        try { cb(); } catch (e) { /* ignore */ }
-      }
+  /**
+   * 关闭弹窗。
+   * @param {number} [token] 只关这一个；不传则关当前弹窗（用于"替换"场景）
+   */
+  function closeModal(token) {
+    if (!state.openModalEl) return;
+    if (token !== undefined && token !== state.openModalToken) return;
+    const cb = state.openModalOnClose;
+    state.openModalEl.remove();
+    state.openModalEl = null;
+    state.openModalToken = 0;
+    state.openModalOnClose = null;
+    if (cb) {
+      try { cb(); } catch (e) { /* ignore */ }
     }
   }
 
@@ -1024,6 +1047,7 @@
       });
     });
   }
+  /* __MODAL_SLICE_END__ */
 
   /* ==================== 面板 ==================== */
 
