@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const SRC = path.join(__dirname, '..', 'src', '角色名注入.js');
+const SRC = path.join(__dirname, '..', 'src', '角色提词器.js');
 const source = fs.readFileSync(SRC, 'utf8');
 
 const START = '/* __TEST_SLICE_START__ */';
@@ -26,7 +26,7 @@ const slice = source.slice(startIdx + START.length, endIdx);
 // 切片里用到的外部常量
 const sandbox = { CURSOR_MARK: '|', console, crypto: require('crypto').webcrypto, Date, Math, String, Number, Array, Object, JSON, Set, Map, RegExp };
 vm.createContext(sandbox);
-vm.runInContext(`${slice}\n;globalThis.__fns = { compareVersion, parseContent, buildInjectedValue, defaultContent, newId, normalizeEntry, filterEntries, uniqueTitle, worldbookCandidates, esc, clamp };`, sandbox);
+vm.runInContext(`${slice}\n;globalThis.__fns = { compareVersion, parseContent, buildInjectedValue, defaultContent, newId, normalizeEntry, filterEntries, uniqueTitle, worldbookCandidates, esc, clamp, LIBRARY };`, sandbox);
 const F = sandbox.__fns;
 
 let pass = 0;
@@ -76,6 +76,35 @@ check('插入: 替换选区', F.buildInjectedValue('前XX后', 1, 3, '中间', 2
 check('插入: 选区越界兜底', F.buildInjectedValue('abc', 99, 99, 'X', 1, 'cursor'), { value: 'abcX', cursor: 4 });
 check('默认模式为追加', F.buildInjectedValue('a', 1, 1, 'b', 1, undefined), { value: 'a\nb', cursor: 3 });
 check('光标越界兜底', F.buildInjectedValue('', 0, 0, 'ab', 99, 'replace'), { value: 'ab', cursor: 2 });
+
+/* ---------- 追加模式的分隔符 ---------- */
+check('分隔符: 换行（默认）', F.buildInjectedValue('a', 1, 1, 'b', 1, 'append', '\n'), { value: 'a\nb', cursor: 3 });
+check('分隔符: 不传参数默认换行', F.buildInjectedValue('a', 1, 1, 'b', 1, 'append'), { value: 'a\nb', cursor: 3 });
+check('分隔符: 空格', F.buildInjectedValue('a', 1, 1, 'b', 1, 'append', ' '), { value: 'a b', cursor: 3 });
+check('分隔符: 不分隔', F.buildInjectedValue('a', 1, 1, 'b', 1, 'append', ''), { value: 'ab', cursor: 2 });
+check('分隔符: 空输入框时不加分隔符', F.buildInjectedValue('', 0, 0, 'b', 1, 'append', '\n'), { value: 'b', cursor: 1 });
+check('分隔符: 只有空白时不加', F.buildInjectedValue('   ', 3, 3, 'b', 1, 'append', '\n'), { value: 'b', cursor: 1 });
+check('分隔符: 不影响替换模式', F.buildInjectedValue('a', 0, 1, 'b', 1, 'replace', '\n'), { value: 'b', cursor: 1 });
+check('分隔符: 不影响插入模式', F.buildInjectedValue('ab', 1, 1, 'X', 1, 'cursor', '\n'), { value: 'aXb', cursor: 2 });
+
+/* ---------- 预设库数据自检 ---------- */
+{
+  check('预设库: 非空', F.LIBRARY.length > 0, true);
+  const titles = F.LIBRARY.map((i) => i.title);
+  check('预设库: 标题不重复', new Set(titles).size, titles.length);
+  const badParse = F.LIBRARY.filter((i) => {
+    const p = F.parseContent(i.content);
+    // 解析后必须还有内容，且光标落在合法范围内
+    return !p.text || p.cursor < 0 || p.cursor > p.text.length;
+  });
+  check('预设库: 每条都能正确解析', badParse.map((i) => i.title), []);
+  const noMark = F.LIBRARY.filter((i) => F.parseContent(i.content).cursor === F.parseContent(i.content).text.length && !i.content.includes('|'));
+  check('预设库: 都带光标标记', noMark.map((i) => i.title), []);
+  check('预设库: 每条都有分组和描述', F.LIBRARY.filter((i) => !i.group || !i.desc).length, 0);
+  check('预设库: 对话格式正确', F.parseContent(F.LIBRARY.find((i) => i.title === '对话').content).text, '“”');
+  check('预设库: 心里话格式正确', F.parseContent(F.LIBRARY.find((i) => i.title === '心里话').content).text, '**');
+  check('预设库: 代码块可解析', F.parseContent(F.LIBRARY.find((i) => i.title === '代码块').content).text, '```\n\n```');
+}
 
 /* ---------- defaultContent ---------- */
 check('默认内容', F.defaultContent('徐渭'), '徐渭：“|”');

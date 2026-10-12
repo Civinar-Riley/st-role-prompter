@@ -1,5 +1,5 @@
 /**
- * 角色名注入 v1.0.0
+ * 角色提词器 v1.0.0
  *
  * 酒馆助手（JS-Slash-Runner）脚本。
  * 悬浮面板管理「标题 / 描述 / 注入内容」条目，点击条目把注入内容送进酒馆输入框，
@@ -10,7 +10,7 @@
  *   - 通用池 → 全局变量，随用户存档
  *   设置单独存全局变量（全局偏好，不分池）
  *
- * 入口：酒馆助手脚本按钮「角色名注入」+ 可拖动悬浮球（可在设置里关闭）
+ * 入口：酒馆助手脚本按钮「角色提词器」+ 可拖动悬浮球（可在设置里关闭）
  *
  * 版本要求：SillyTavern 1.18+ / 酒馆助手 4.x+
  */
@@ -19,22 +19,26 @@
 
   /* ==================== 常量 ==================== */
 
-  const SCRIPT_VERSION = '1.0.0';
-  const BUTTON_NAME = '角色名注入';
-  const STORE_KEY = '角色名注入';
+  const SCRIPT_VERSION = '1.1.0';
+  const BUTTON_NAME = '角色提词器';
+  const STORE_KEY = '角色提词器';
+  // v1.0.0 时叫「角色名注入」，改名的同时把老数据搬过来（读到这里时会自动迁移）
+  const LEGACY_STORE_KEY = '角色名注入';
+  // v1.0.0 用的元素 id 前缀是 rni-，卸载时一并清掉，避免新旧版本同时启用留下残骸
+  const LEGACY_ID_PREFIX = 'rni-';
   const CURSOR_MARK = '|';
   const MIN_TAVERN = '1.18.0';
   const MIN_HELPER = '4.0.0';
 
-  const PANEL_ID = 'rni-panel';
-  const STYLE_ID = 'rni-style';
-  const BALL_ID = 'rni-ball';
-  const MODAL_ID = 'rni-modal';
-  const ENTRY_ID = 'rni-entry';
-  const INSTANCE_KEY = '__RNI_ACTIVE_TOKEN__';
+  const PANEL_ID = 'rpt-panel';
+  const STYLE_ID = 'rpt-style';
+  const BALL_ID = 'rpt-ball';
+  const MODAL_ID = 'rpt-modal';
+  const ENTRY_ID = 'rpt-entry';
+  const INSTANCE_KEY = '__RPT_ACTIVE_TOKEN__';
 
   const TOKEN = `t${Date.now()}${Math.random().toString(36).slice(2, 9)}`;
-  const TAG = '[角色名注入]';
+  const TAG = '[角色提词器]';
 
   /* ==================== 环境 ==================== */
 
@@ -119,9 +123,10 @@
    * @param {string} injectText 要注入的文本（已去掉光标标记）
    * @param {number} injectCursor 光标在 injectText 里的下标
    * @param {'append'|'replace'|'cursor'} mode
+   * @param {string} [separator] 追加模式下与已有内容的分隔符（默认换行）
    * @returns {{value: string, cursor: number}}
    */
-  function buildInjectedValue(oldValue, selStart, selEnd, injectText, injectCursor, mode) {
+  function buildInjectedValue(oldValue, selStart, selEnd, injectText, injectCursor, mode, separator) {
     const old = String(oldValue == null ? '' : oldValue);
     const text = String(injectText == null ? '' : injectText);
     let next;
@@ -136,13 +141,13 @@
       next = old.slice(0, s) + text + old.slice(e);
       base = s;
     } else {
-      // append：输入框空则直接填，非空则清理末尾空白后换行追加
+      // append：输入框空则直接填，非空则清理末尾空白后用分隔符接上
       if (!old) {
         next = text;
         base = 0;
       } else {
         const trimmed = old.replace(/\s+$/, '');
-        const sep = trimmed ? '\n' : '';
+        const sep = trimmed ? (typeof separator === 'string' ? separator : '\n') : '';
         next = trimmed + sep + text;
         base = trimmed.length + sep.length;
       }
@@ -247,18 +252,49 @@
     return Math.min(Math.max(v, min), max);
   }
 
+  /**
+   * 内置预设库：常用格式片段。不自动进任何池子，由用户在「预设库」里勾选后手动添加。
+   * content 里用 | 标记光标落点。
+   */
+  const LIBRARY = [
+    // ---- 角色扮演常用 ----
+    { group: '角色扮演', title: '对话', desc: '双引号台词，光标在引号中间', content: '“|”' },
+    { group: '角色扮演', title: '心里话', desc: '星号内心独白（Markdown 里就是斜体）', content: '*|*' },
+    { group: '角色扮演', title: '旁白', desc: '括号包住的动作或旁白', content: '（|）' },
+    { group: '角色扮演', title: '双人对答', desc: '两句台词连着写，光标在第一句里', content: '“|”\n“”' },
+    { group: '角色扮演', title: '场景切换', desc: '分隔线式转场', content: '—— | ——' },
+    // ---- Markdown 格式 ----
+    { group: 'Markdown 格式', title: '斜体', desc: '同 Ctrl+I（和「心里话」是同一种写法）', content: '*|*' },
+    { group: 'Markdown 格式', title: '粗体', desc: '同 Ctrl+B', content: '**|**' },
+    { group: 'Markdown 格式', title: '粗斜体', desc: '又粗又斜', content: '***|***' },
+    { group: 'Markdown 格式', title: '下划线', desc: '同 Ctrl+U', content: '__|__' },
+    { group: 'Markdown 格式', title: '删除线', desc: '同 Ctrl+Shift+`', content: '~~|~~' },
+    { group: 'Markdown 格式', title: '行内代码', desc: '同 Ctrl+K', content: '`|`' },
+    { group: 'Markdown 格式', title: '代码块', desc: '多行代码块', content: '```\n|\n```' },
+    { group: 'Markdown 格式', title: '引用', desc: '引用块', content: '> |' },
+    { group: 'Markdown 格式', title: '大标题', desc: '一级标题', content: '# |' },
+    { group: 'Markdown 格式', title: '中标题', desc: '二级标题', content: '## |' },
+    { group: 'Markdown 格式', title: '小标题', desc: '三级标题', content: '### |' },
+    { group: 'Markdown 格式', title: '超链接', desc: '光标在链接文字处', content: '[|]()' },
+    { group: 'Markdown 格式', title: '图像', desc: '光标在图片网址处', content: '![](|)' },
+  ];
+
   /* __TEST_SLICE_END__ */
 
   /* ==================== 状态 ==================== */
 
   const DEFAULT_SETTINGS = {
     injectMode: 'append',        // append | replace | cursor
+    appendSeparator: 'newline',  // newline | space | none —— 仅追加模式用
     autoCloseAfterInject: true,
     showFloatingBall: true,
     theme: 'auto',               // auto | dark | light
     ballPosition: null,          // {x, y}
     panelPosition: null,         // {x, y}
   };
+
+  /** 把设置里的分隔符名转成实际字符串 */
+  const SEPARATOR_MAP = { newline: '\n', space: ' ', none: '' };
 
   let globalStore = null;        // 通用池：{ version, entries, importedWorldbookEntries, settings }
   let cardStore = null;          // 本卡池：{ version, entries, importedWorldbookEntries }；无角色卡时为 null
@@ -270,6 +306,7 @@
     editingId: null,
     lastClosedAt: 0,
     openModalEl: null,
+    openModalOnClose: null,
   };
 
   /* ==================== 小工具 ==================== */
@@ -346,6 +383,8 @@
 
   // 读取异常标记：一旦读取出过问题，就禁止写盘，避免把真实数据覆盖成空
   let dataReadFailed = false;
+  // 哪些池这次是从旧键（v1.0.0 的「角色名注入」）读出来的，保存成功后要清掉旧键
+  const legacyKeyUsed = { global: false, card: false };
 
   /**
    * 读取某个池。返回 null 表示该池当前不可用（没有打开角色卡）。
@@ -363,7 +402,16 @@
         return pool === 'card' ? null : emptyStore();
       }
       const table = vars || {};
-      const raw = table[STORE_KEY];
+      let raw = table[STORE_KEY];
+      if (!raw || typeof raw !== 'object') {
+        // 兼容 v1.0.0 的旧键，读到就沿用，等保存成功后清掉
+        const legacy = table[LEGACY_STORE_KEY];
+        if (legacy && typeof legacy === 'object') {
+          raw = legacy;
+          legacyKeyUsed[pool] = true;
+          log(`检测到旧版数据（键名「${LEGACY_STORE_KEY}」），已自动接管`);
+        }
+      }
       if (!raw || typeof raw !== 'object') return emptyStore();
       const store = emptyStore();
       store.version = Number.isFinite(raw.version) ? raw.version : 1;
@@ -403,6 +451,15 @@
 
     try {
       await callApi(fn, { [STORE_KEY]: payload }, poolOption(pool));
+      // 新键写成功后再清旧键，顺序不能反——万一清完写失败，数据就没了
+      if (legacyKeyUsed[pool]) {
+        legacyKeyUsed[pool] = false;
+        try {
+          const del = G('deleteVariable');
+          if (del) await callApi(del, LEGACY_STORE_KEY, poolOption(pool));
+          log('已清理旧版数据键');
+        } catch (e) { /* 清不掉也无妨，下次读取仍会优先用新键 */ }
+      }
       return true;
     } catch (e) {
       console.error(TAG, '保存失败', e);
@@ -538,7 +595,7 @@
    * 写法与 SillyTavern 官方一致（/setinput、/impersonate、发送后清空三处都这么写）：
    *   设 value → 派发 input 事件 → focus → setSelectionRange
    */
-  function injectToInputBox(text, cursor, mode) {
+  function injectToInputBox(text, cursor, mode, separator) {
     const ta = findSendTextarea();
     if (!ta) {
       const ok = copyToClipboard(text);
@@ -548,7 +605,7 @@
 
     const selStart = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
     const selEnd = typeof ta.selectionEnd === 'number' ? ta.selectionEnd : selStart;
-    const built = buildInjectedValue(ta.value, selStart, selEnd, text, cursor, mode);
+    const built = buildInjectedValue(ta.value, selStart, selEnd, text, cursor, mode, separator);
 
     try {
       ta.value = built.value;
@@ -573,7 +630,12 @@
     const parsed = parseContent(entry.content);
     if (!parsed.text) { toast('这个条目还没有注入内容', 'warning'); return; }
 
-    const ok = injectToInputBox(parsed.text, parsed.cursor, settings.injectMode);
+    const ok = injectToInputBox(
+      parsed.text,
+      parsed.cursor,
+      settings.injectMode,
+      SEPARATOR_MAP[settings.appendSeparator],
+    );
     if (!ok) return;
 
     entry.useCount = (entry.useCount || 0) + 1;
@@ -588,14 +650,17 @@
 
   const CSS_TEXT = `
 #${PANEL_ID} {
-  --rni-bg: #1e2127;
-  --rni-card: #262a33;
-  --rni-hover: #2f3542;
-  --rni-fg: #e2dfd7;
-  --rni-muted: #8b93a7;
-  --rni-border: #383e4d;
-  --rni-accent: #7c5cff;
-  --rni-danger: #d9534f;
+  --rpt-bg: #1e2127;
+  --rpt-card: #262a33;
+  --rpt-hover: #2f3542;
+  --rpt-fg: #e2dfd7;
+  --rpt-muted: #8b93a7;
+  --rpt-border: #383e4d;
+  --rpt-accent: #7c5cff;
+  --rpt-danger: #d9534f;
+  /* kbd 用独立配色：深色主题下 muted 灰在深底上对比度不够 */
+  --rpt-key: #333a47;
+  --rpt-key-fg: #f0eee8;
   position: fixed;
   z-index: 99991;
   width: 420px;
@@ -603,102 +668,106 @@
   max-height: min(560px, calc(100vh - 60px));
   display: flex;
   flex-direction: column;
-  background: var(--rni-bg);
-  color: var(--rni-fg);
-  border: 1px solid var(--rni-border);
+  background: var(--rpt-bg);
+  color: var(--rpt-fg);
+  border: 1px solid var(--rpt-border);
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0,0,0,.45);
   font: 13px/1.5 "Noto Sans SC","Segoe UI","Microsoft YaHei",sans-serif;
   overflow: hidden;
   box-sizing: border-box;
 }
-#${PANEL_ID}.rni-light {
-  --rni-bg: #f5f5f7;
-  --rni-card: #ffffff;
-  --rni-hover: #ececf0;
-  --rni-fg: #2c2c2e;
-  --rni-muted: #6b7280;
-  --rni-border: #d9d9de;
+#${PANEL_ID}.rpt-light {
+  --rpt-bg: #f5f5f7;
+  --rpt-card: #ffffff;
+  --rpt-hover: #ececf0;
+  --rpt-fg: #2c2c2e;
+  --rpt-muted: #6b7280;
+  --rpt-border: #d9d9de;
+  --rpt-key: #e6e6eb;
+  --rpt-key-fg: #2c2c2e;
 }
-#${PANEL_ID}.rni-hidden { display: none; }
+#${PANEL_ID}.rpt-hidden { display: none; }
 #${PANEL_ID} * { box-sizing: border-box; }
 
-#${PANEL_ID} .rni-head {
+#${PANEL_ID} .rpt-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 9px 10px; border-bottom: 1px solid var(--rni-border);
+  padding: 9px 10px; border-bottom: 1px solid var(--rpt-border);
   cursor: grab; user-select: none; flex: 0 0 auto;
 }
-#${PANEL_ID} .rni-head.rni-dragging { cursor: grabbing; }
-#${PANEL_ID} .rni-brand { font-weight: 600; white-space: nowrap; }
-#${PANEL_ID} .rni-tabs { display: flex; gap: 4px; flex: 1 1 auto; }
-#${PANEL_ID} .rni-tab {
+#${PANEL_ID} .rpt-head.rpt-dragging { cursor: grabbing; }
+#${PANEL_ID} .rpt-brand { font-weight: 600; white-space: nowrap; }
+#${PANEL_ID} .rpt-tabs { display: flex; gap: 4px; flex: 1 1 auto; }
+#${PANEL_ID} .rpt-tab {
   padding: 3px 9px; border-radius: 999px; cursor: pointer;
   border: 1px solid transparent; background: transparent;
-  color: var(--rni-muted); font: inherit; font-size: 12px; white-space: nowrap;
+  color: var(--rpt-muted); font: inherit; font-size: 12px; white-space: nowrap;
 }
-#${PANEL_ID} .rni-tab:hover:not(:disabled) { background: var(--rni-hover); }
-#${PANEL_ID} .rni-tab.rni-active { background: var(--rni-accent); color: #fff; }
-#${PANEL_ID} .rni-tab:disabled { opacity: .4; cursor: not-allowed; }
-#${PANEL_ID} .rni-head-actions { display: flex; gap: 2px; flex: 0 0 auto; }
-#${PANEL_ID} .rni-icon {
+#${PANEL_ID} .rpt-tab:hover:not(:disabled) { background: var(--rpt-hover); }
+#${PANEL_ID} .rpt-tab.rpt-active { background: var(--rpt-accent); color: #fff; }
+#${PANEL_ID} .rpt-tab:disabled { opacity: .4; cursor: not-allowed; }
+#${PANEL_ID} .rpt-head-actions { display: flex; gap: 2px; flex: 0 0 auto; }
+#${PANEL_ID} .rpt-icon {
   width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
-  border: none; background: transparent; color: var(--rni-muted);
+  border: none; background: transparent; color: var(--rpt-muted);
   border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
 }
-#${PANEL_ID} .rni-icon:hover { background: var(--rni-hover); color: var(--rni-fg); }
+#${PANEL_ID} .rpt-icon:hover { background: var(--rpt-hover); color: var(--rpt-fg); }
 
-#${PANEL_ID} .rni-notice {
+#${PANEL_ID} .rpt-notice {
   flex: 0 0 auto; padding: 6px 10px; font-size: 12px;
-  color: var(--rni-muted); background: var(--rni-card);
-  border-bottom: 1px solid var(--rni-border);
+  color: var(--rpt-fg); background: var(--rpt-card);
+  border-bottom: 1px solid var(--rpt-border); line-height: 1.7;
 }
-#${PANEL_ID} .rni-search-row { padding: 8px 10px; border-bottom: 1px solid var(--rni-border); flex: 0 0 auto; }
-#${PANEL_ID} .rni-search {
+#${PANEL_ID} .rpt-search-row { padding: 8px 10px; border-bottom: 1px solid var(--rpt-border); flex: 0 0 auto; }
+#${PANEL_ID} .rpt-search {
   width: 100%; padding: 6px 10px; border-radius: 8px; font: inherit;
-  background: var(--rni-card); color: var(--rni-fg);
-  border: 1px solid var(--rni-border); outline: none;
+  background: var(--rpt-card); color: var(--rpt-fg);
+  border: 1px solid var(--rpt-border); outline: none;
 }
-#${PANEL_ID} .rni-search:focus { border-color: var(--rni-accent); }
+#${PANEL_ID} .rpt-search:focus { border-color: var(--rpt-accent); }
 
-#${PANEL_ID} .rni-list { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
-#${PANEL_ID} .rni-item {
+#${PANEL_ID} .rpt-list { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
+#${PANEL_ID} .rpt-item {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; border-radius: 8px; cursor: pointer;
   border: 1px solid transparent;
 }
-#${PANEL_ID} .rni-item:hover { background: var(--rni-hover); border-color: var(--rni-border); }
-#${PANEL_ID} .rni-item.rni-flash { background: var(--rni-accent); }
-#${PANEL_ID} .rni-item-main { flex: 1 1 auto; min-width: 0; }
-#${PANEL_ID} .rni-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#${PANEL_ID} .rni-item-desc {
-  font-size: 12px; color: var(--rni-muted); margin-top: 1px;
+#${PANEL_ID} .rpt-item:hover { background: var(--rpt-hover); border-color: var(--rpt-border); }
+#${PANEL_ID} .rpt-item.rpt-flash { background: var(--rpt-accent); }
+#${PANEL_ID} .rpt-item-main { flex: 1 1 auto; min-width: 0; }
+#${PANEL_ID} .rpt-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#${PANEL_ID} .rpt-item-desc {
+  font-size: 12px; color: var(--rpt-muted); margin-top: 1px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-#${PANEL_ID} .rni-item-actions { display: flex; gap: 2px; flex: 0 0 auto; opacity: 0; transition: opacity .12s; }
-#${PANEL_ID} .rni-item:hover .rni-item-actions { opacity: 1; }
-#${PANEL_ID} .rni-item-actions .rni-icon { width: 24px; height: 24px; font-size: 13px; }
-#${PANEL_ID} .rni-item-actions .rni-del:hover { background: var(--rni-danger); color: #fff; }
-#${PANEL_ID} .rni-empty { padding: 26px 16px; text-align: center; color: var(--rni-muted); font-size: 12px; line-height: 1.9; }
-#${PANEL_ID} .rni-empty kbd {
-  background: var(--rni-card); border: 1px solid var(--rni-border);
-  border-radius: 4px; padding: 0 4px; font-family: ui-monospace, monospace;
+#${PANEL_ID} .rpt-item-actions { display: flex; gap: 2px; flex: 0 0 auto; opacity: 0; transition: opacity .12s; }
+#${PANEL_ID} .rpt-item:hover .rpt-item-actions { opacity: 1; }
+#${PANEL_ID} .rpt-item-actions .rpt-icon { width: 24px; height: 24px; font-size: 13px; }
+#${PANEL_ID} .rpt-item-actions .rpt-del:hover { background: var(--rpt-danger); color: #fff; }
+#${PANEL_ID} .rpt-empty { padding: 26px 16px; text-align: center; color: var(--rpt-muted); font-size: 12px; line-height: 1.9; }
+#${PANEL_ID} .rpt-empty kbd, #${PANEL_ID} .rpt-notice kbd {
+  background: var(--rpt-key); color: var(--rpt-key-fg);
+  border: 1px solid var(--rpt-border); border-radius: 4px;
+  padding: 0 5px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
 }
 
-#${PANEL_ID} .rni-foot {
+#${PANEL_ID} .rpt-foot {
   flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-top: 1px solid var(--rni-border);
-  font-size: 12px; color: var(--rni-muted);
+  padding: 7px 10px; border-top: 1px solid var(--rpt-border);
+  font-size: 12px; color: var(--rpt-muted);
 }
-#${PANEL_ID} .rni-status { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#${PANEL_ID} .rni-foot .rni-btn { flex: 0 0 auto; }
+#${PANEL_ID} .rpt-status { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#${PANEL_ID} .rpt-foot .rpt-btn { flex: 0 0 auto; }
 
-#${PANEL_ID} .rni-btn {
+#${PANEL_ID} .rpt-btn {
   padding: 4px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
-  background: var(--rni-card); color: var(--rni-fg); border: 1px solid var(--rni-border);
+  background: var(--rpt-card); color: var(--rpt-fg); border: 1px solid var(--rpt-border);
 }
-#${PANEL_ID} .rni-btn:hover { background: var(--rni-hover); }
-#${PANEL_ID} .rni-btn.rni-primary { background: var(--rni-accent); border-color: transparent; color: #fff; }
-#${PANEL_ID} .rni-btn.rni-danger { background: var(--rni-danger); border-color: transparent; color: #fff; }
+#${PANEL_ID} .rpt-btn:hover { background: var(--rpt-hover); }
+#${PANEL_ID} .rpt-btn.rpt-primary { background: var(--rpt-accent); border-color: transparent; color: #fff; }
+#${PANEL_ID} .rpt-btn.rpt-danger { background: var(--rpt-danger); border-color: transparent; color: #fff; }
 
 #${BALL_ID} {
   position: fixed; z-index: 999990;
@@ -710,100 +779,127 @@
   box-shadow: 0 4px 14px rgba(0,0,0,.4);
   cursor: grab; user-select: none; touch-action: none;
 }
-#${BALL_ID}.rni-dragging { cursor: grabbing; }
+#${BALL_ID}.rpt-dragging { cursor: grabbing; }
 
-.rni-modal-mask {
+.rpt-modal-mask {
   position: fixed; inset: 0; z-index: 99999;
   background: rgba(0,0,0,.5);
   display: flex; align-items: center; justify-content: center;
 }
-.rni-modal {
-  --rni-bg: #1e2127;
-  --rni-card: #262a33;
-  --rni-hover: #2f3542;
-  --rni-fg: #e2dfd7;
-  --rni-muted: #8b93a7;
-  --rni-border: #383e4d;
-  --rni-accent: #7c5cff;
-  --rni-danger: #d9534f;
+.rpt-modal {
+  --rpt-bg: #1e2127;
+  --rpt-card: #262a33;
+  --rpt-hover: #2f3542;
+  --rpt-fg: #e2dfd7;
+  --rpt-muted: #8b93a7;
+  --rpt-border: #383e4d;
+  --rpt-accent: #7c5cff;
+  --rpt-danger: #d9534f;
+  --rpt-key: #333a47;
+  --rpt-key-fg: #f0eee8;
   width: min(560px, 94vw); max-height: 88vh; overflow: auto;
-  background: var(--rni-bg); color: var(--rni-fg);
-  border: 1px solid var(--rni-border); border-radius: 12px;
+  background: var(--rpt-bg); color: var(--rpt-fg);
+  border: 1px solid var(--rpt-border); border-radius: 12px;
   padding: 16px 18px;
   box-shadow: 0 16px 48px rgba(0,0,0,.55);
   font: 13px/1.55 "Noto Sans SC","Segoe UI","Microsoft YaHei",sans-serif;
   box-sizing: border-box;
 }
-.rni-modal.rni-light {
-  --rni-bg: #f5f5f7;
-  --rni-card: #ffffff;
-  --rni-hover: #ececf0;
-  --rni-fg: #2c2c2e;
-  --rni-muted: #6b7280;
-  --rni-border: #d9d9de;
+.rpt-modal.rpt-light {
+  --rpt-bg: #f5f5f7;
+  --rpt-card: #ffffff;
+  --rpt-hover: #ececf0;
+  --rpt-fg: #2c2c2e;
+  --rpt-muted: #6b7280;
+  --rpt-border: #d9d9de;
+  --rpt-key: #e6e6eb;
+  --rpt-key-fg: #2c2c2e;
 }
-.rni-modal * { box-sizing: border-box; }
-.rni-modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
-.rni-modal .rni-field { margin-bottom: 12px; }
-.rni-modal .rni-label { display: block; font-size: 12px; color: var(--rni-muted); margin-bottom: 4px; }
-.rni-modal .rni-input, .rni-modal .rni-textarea {
+.rpt-modal * { box-sizing: border-box; }
+.rpt-modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+.rpt-modal .rpt-field { margin-bottom: 12px; }
+.rpt-modal .rpt-label { display: block; font-size: 12px; color: var(--rpt-muted); margin-bottom: 4px; }
+.rpt-modal .rpt-input, .rpt-modal .rpt-textarea {
   width: 100%; padding: 7px 10px; border-radius: 8px; font: inherit;
-  background: var(--rni-card); color: var(--rni-fg);
-  border: 1px solid var(--rni-border); outline: none;
+  background: var(--rpt-card); color: var(--rpt-fg);
+  border: 1px solid var(--rpt-border); outline: none;
 }
-.rni-modal .rni-textarea { min-height: 88px; resize: vertical; line-height: 1.5; }
-.rni-modal .rni-input:focus, .rni-modal .rni-textarea:focus { border-color: var(--rni-accent); }
-.rni-modal .rni-hint { font-size: 11.5px; color: var(--rni-muted); margin-top: 5px; }
-.rni-modal .rni-hint kbd {
-  background: var(--rni-card); border: 1px solid var(--rni-border);
-  border-radius: 4px; padding: 0 4px; font-family: ui-monospace, monospace;
+.rpt-modal .rpt-textarea { min-height: 88px; resize: vertical; line-height: 1.5; }
+.rpt-modal .rpt-input:focus, .rpt-modal .rpt-textarea:focus { border-color: var(--rpt-accent); }
+.rpt-modal .rpt-hint { font-size: 11.5px; color: var(--rpt-muted); margin-top: 5px; }
+.rpt-modal kbd {
+  background: var(--rpt-key); color: var(--rpt-key-fg);
+  border: 1px solid var(--rpt-border); border-radius: 4px;
+  padding: 0 5px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
 }
-.rni-modal .rni-preview {
+.rpt-modal .rpt-preview {
   margin-top: 8px; padding: 8px 10px; border-radius: 8px;
-  background: var(--rni-card); border: 1px dashed var(--rni-border);
+  background: var(--rpt-card); border: 1px dashed var(--rpt-border);
   font-size: 12.5px; word-break: break-all; white-space: pre-wrap;
 }
-.rni-modal .rni-caret {
+.rpt-modal .rpt-caret {
   display: inline-block; width: 2px; height: 1.05em; vertical-align: -.15em;
-  background: var(--rni-accent); animation: rni-blink 1s steps(1) infinite;
+  background: var(--rpt-accent); animation: rpt-blink 1s steps(1) infinite;
 }
-@keyframes rni-blink { 50% { opacity: 0; } }
-.rni-modal .rni-actions {
+@keyframes rpt-blink { 50% { opacity: 0; } }
+.rpt-modal .rpt-actions {
   display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;
 }
-.rni-modal .rni-actions.rni-split { justify-content: space-between; }
-.rni-modal .rni-btn {
+.rpt-modal .rpt-actions.rpt-split { justify-content: space-between; }
+.rpt-modal .rpt-btn {
   padding: 6px 14px; border-radius: 7px; cursor: pointer; font: inherit;
-  background: var(--rni-card); color: var(--rni-fg); border: 1px solid var(--rni-border);
+  background: var(--rpt-card); color: var(--rpt-fg); border: 1px solid var(--rpt-border);
 }
-.rni-modal .rni-btn:hover { background: var(--rni-hover); }
-.rni-modal .rni-btn.rni-primary { background: var(--rni-accent); border-color: transparent; color: #fff; }
-.rni-modal .rni-btn.rni-danger { background: var(--rni-danger); border-color: transparent; color: #fff; }
-.rni-modal .rni-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.rni-modal .rni-row label { flex: 1 1 auto; }
-.rni-modal select.rni-input { cursor: pointer; }
-.rni-modal .rni-check-list {
+.rpt-modal .rpt-btn:hover { background: var(--rpt-hover); }
+.rpt-modal .rpt-btn.rpt-primary { background: var(--rpt-accent); border-color: transparent; color: #fff; }
+.rpt-modal .rpt-btn.rpt-danger { background: var(--rpt-danger); border-color: transparent; color: #fff; }
+.rpt-modal .rpt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rpt-modal .rpt-row label { flex: 1 1 auto; }
+.rpt-modal select.rpt-input { cursor: pointer; }
+.rpt-modal .rpt-check-list {
   max-height: 320px; overflow-y: auto; margin-top: 8px;
-  border: 1px solid var(--rni-border); border-radius: 8px; padding: 4px;
+  border: 1px solid var(--rpt-border); border-radius: 8px; padding: 4px;
 }
-.rni-modal .rni-check-item {
+.rpt-modal .rpt-check-item {
   display: flex; align-items: flex-start; gap: 8px;
   padding: 6px 8px; border-radius: 6px; cursor: pointer;
 }
-.rni-modal .rni-check-item:hover { background: var(--rni-hover); }
-.rni-modal .rni-check-item input { margin-top: 3px; flex: 0 0 auto; }
-.rni-modal .rni-check-main { min-width: 0; flex: 1 1 auto; }
-.rni-modal .rni-check-name { font-weight: 600; }
-.rni-modal .rni-check-preview {
-  font-size: 11.5px; color: var(--rni-muted); margin-top: 1px;
+.rpt-modal .rpt-check-item:hover { background: var(--rpt-hover); }
+.rpt-modal .rpt-check-item.rpt-exists { opacity: .5; cursor: not-allowed; }
+.rpt-modal .rpt-check-item input { margin-top: 3px; flex: 0 0 auto; }
+.rpt-modal .rpt-check-main { min-width: 0; flex: 1 1 auto; }
+.rpt-modal .rpt-check-name { font-weight: 600; }
+.rpt-modal .rpt-check-preview {
+  font-size: 11.5px; color: var(--rpt-muted); margin-top: 1px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.rni-modal .rni-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-.rni-modal .rni-tab {
-  padding: 4px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12.5px;
-  background: var(--rni-card); color: var(--rni-muted); border: 1px solid var(--rni-border);
+.rpt-modal .rpt-lib-group {
+  font-size: 11.5px; color: var(--rpt-muted); font-weight: 600;
+  padding: 8px 8px 4px; letter-spacing: .04em;
 }
-.rni-modal .rni-tab.rni-active { background: var(--rni-accent); color: #fff; border-color: transparent; }
+.rpt-modal .rpt-lib-group:first-child { padding-top: 4px; }
+.rpt-modal .rpt-lib-sample {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  background: var(--rpt-key); color: var(--rpt-key-fg);
+  border-radius: 4px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px; white-space: pre;
+}
+.rpt-modal .rpt-tag {
+  margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10.5px;
+  font-weight: 400; background: var(--rpt-key); color: var(--rpt-muted);
+}
+.rpt-modal .rpt-danger-zone {
+  border: 1px solid var(--rpt-danger); border-radius: 8px;
+  padding: 10px 12px; margin-top: 4px;
+}
+.rpt-modal .rpt-danger-zone .rpt-hint { margin-top: 8px; }
+.rpt-modal .rpt-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.rpt-modal .rpt-tab {
+  padding: 4px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12.5px;
+  background: var(--rpt-card); color: var(--rpt-muted); border: 1px solid var(--rpt-border);
+}
+.rpt-modal .rpt-tab.rpt-active { background: var(--rpt-accent); color: #fff; border-color: transparent; }
 `;
 
   function detectDark() {
@@ -839,24 +935,24 @@
 
   function applyTheme(node) {
     if (!node) return;
-    node.classList.toggle('rni-light', isLight());
+    node.classList.toggle('rpt-light', isLight());
   }
 
   /* ==================== 弹窗 ==================== */
 
-  function showModal({ title, contentEl, buttons, wide }) {
+  function showModal({ title, contentEl, buttons, wide, onClose }) {
     closeModal();
-    const box = el('div', { class: 'rni-modal' }, [
+    const box = el('div', { class: 'rpt-modal' }, [
       el('h3', { text: title }),
       contentEl || null,
     ]);
     if (wide) box.style.width = 'min(720px, 96vw)';
 
-    const actions = el('div', { class: 'rni-actions' });
+    const actions = el('div', { class: 'rpt-actions' });
     const buttonList = buttons || [];
     for (const b of buttonList) {
       const btn = el('button', {
-        class: `rni-btn${b.primary ? ' rni-primary' : ''}${b.danger ? ' rni-danger' : ''}`,
+        class: `rpt-btn${b.primary ? ' rpt-primary' : ''}${b.danger ? ' rpt-danger' : ''}`,
         text: b.text,
         type: 'button',
       });
@@ -877,22 +973,57 @@
     // 按钮为空时不渲染操作行（面板自带操作行的弹窗用这个分支）
     if (buttonList.length) box.appendChild(actions);
 
-    const mask = el('div', { class: 'rni-modal-mask' }, box);
+    const mask = el('div', { class: 'rpt-modal-mask' }, box);
     mask.addEventListener('mousedown', (e) => { if (e.target === mask) closeModal(); });
     doc.body.appendChild(mask);
     applyTheme(box);
     state.openModalEl = mask;
+    state.openModalOnClose = typeof onClose === 'function' ? onClose : null;
     return mask;
   }
 
   function closeModal() {
     if (state.openModalEl) {
+      const cb = state.openModalOnClose;
       state.openModalEl.remove();
       state.openModalEl = null;
+      state.openModalOnClose = null;
+      if (cb) {
+        try { cb(); } catch (e) { /* ignore */ }
+      }
     }
   }
 
   const modalOpen = () => !!state.openModalEl;
+
+  /**
+   * Promise 化的确认框。返回 true 表示用户确认，false 表示取消/关闭。
+   * 用于需要串联多次确认的危险操作。
+   */
+  function askConfirm(title, message, opts = {}) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      showModal({
+        title,
+        contentEl: el('div', { style: 'line-height:1.9;' }, message),
+        onClose: () => finish(false),
+        buttons: [
+          { text: opts.cancelText || '取消', onClick: () => finish(false) },
+          {
+            text: opts.okText || '确定',
+            danger: !!opts.danger,
+            primary: !opts.danger,
+            onClick: () => finish(true),
+          },
+        ],
+      });
+    });
+  }
 
   /* ==================== 面板 ==================== */
 
@@ -902,31 +1033,31 @@
 
     let searchTimer = null;
 
-    const panel = el('div', { id: PANEL_ID, class: 'rni-hidden' });
+    const panel = el('div', { id: PANEL_ID, class: 'rpt-hidden' });
 
-    const head = el('div', { class: 'rni-head' }, [
-      el('span', { class: 'rni-brand', text: '🎭 角色名注入' }),
-      el('div', { class: 'rni-tabs' }, [
-        el('button', { class: 'rni-tab', dataset: { pool: 'card' }, type: 'button' }),
-        el('button', { class: 'rni-tab', dataset: { pool: 'global' }, type: 'button' }),
+    const head = el('div', { class: 'rpt-head' }, [
+      el('span', { class: 'rpt-brand', text: '🐧 角色提词器' }),
+      el('div', { class: 'rpt-tabs' }, [
+        el('button', { class: 'rpt-tab', dataset: { pool: 'card' }, type: 'button' }),
+        el('button', { class: 'rpt-tab', dataset: { pool: 'global' }, type: 'button' }),
       ]),
-      el('div', { class: 'rni-head-actions' }, [
-        el('button', { class: 'rni-icon', title: '新建条目', text: '＋', dataset: { act: 'add' }, type: 'button' }),
-        el('button', { class: 'rni-icon', title: '批量导入', text: '⇩', dataset: { act: 'import' }, type: 'button' }),
-        el('button', { class: 'rni-icon', title: '设置', text: '⚙', dataset: { act: 'settings' }, type: 'button' }),
-        el('button', { class: 'rni-icon', title: '关闭', text: '✕', dataset: { act: 'close' }, type: 'button' }),
+      el('div', { class: 'rpt-head-actions' }, [
+        el('button', { class: 'rpt-icon', title: '新建条目', text: '＋', dataset: { act: 'add' }, type: 'button' }),
+        el('button', { class: 'rpt-icon', title: '设置', text: '⚙', dataset: { act: 'settings' }, type: 'button' }),
+        el('button', { class: 'rpt-icon', title: '关闭', text: '✕', dataset: { act: 'close' }, type: 'button' }),
       ]),
     ]);
 
-    const searchRow = el('div', { class: 'rni-search-row' }, [
-      el('input', { class: 'rni-search', placeholder: '🔍 搜索标题或描述…', type: 'text' }),
+    const searchRow = el('div', { class: 'rpt-search-row' }, [
+      el('input', { class: 'rpt-search', placeholder: '🔍 搜索标题或描述…', type: 'text' }),
     ]);
 
-    const list = el('div', { class: 'rni-list' });
+    const list = el('div', { class: 'rpt-list' });
 
-    const foot = el('div', { class: 'rni-foot' }, [
-      el('span', { class: 'rni-status', text: '就绪' }),
-      el('button', { class: 'rni-btn', text: '批量导入', dataset: { act: 'import' }, type: 'button' }),
+    const foot = el('div', { class: 'rpt-foot' }, [
+      el('span', { class: 'rpt-status', text: '就绪' }),
+      el('button', { class: 'rpt-btn', text: '预设库', dataset: { act: 'library' }, type: 'button' }),
+      el('button', { class: 'rpt-btn', text: '批量导入', dataset: { act: 'import' }, type: 'button' }),
     ]);
 
     panel.appendChild(head);
@@ -942,35 +1073,38 @@
     });
 
     // 头部按钮
-    head.querySelector('.rni-tabs').addEventListener('click', (e) => {
-      const btn = e.target.closest('.rni-tab');
+    head.querySelector('.rpt-tabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('.rpt-tab');
       if (!btn || btn.disabled) return;
       state.pool = btn.dataset.pool;
       state.poolPinned = true;
       state.keyword = '';
       clearTimeout(searchTimer);          // 取消挂起的搜索防抖，否则旧关键词会被写回来
-      const s = panel.querySelector('.rni-search');
+      const s = panel.querySelector('.rpt-search');
       if (s) s.value = '';
       renderAll();
     });
 
-    head.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-act]');
-      if (!btn) return;
-      const act = btn.dataset.act;
+    const handleAct = (act) => {
       if (act === 'add') openEntryEditor(null);
       else if (act === 'import') openImportDialog();
+      else if (act === 'library') openLibraryDialog();
       else if (act === 'settings') openSettings();
       else if (act === 'close') closePanel();
+    };
+
+    head.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (btn) handleAct(btn.dataset.act);
     });
 
     foot.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-act="import"]');
-      if (btn) openImportDialog();
+      const btn = e.target.closest('[data-act]');
+      if (btn) handleAct(btn.dataset.act);
     });
 
     // 搜索（防抖；searchTimer 在页签切换时会被清掉）
-    searchRow.querySelector('.rni-search').addEventListener('input', (e) => {
+    searchRow.querySelector('.rpt-search').addEventListener('input', (e) => {
       const v = e.target.value;
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => { state.keyword = v; renderList(); }, 120);
@@ -978,7 +1112,7 @@
 
     // 列表点击（事件委托）
     list.addEventListener('click', (e) => {
-      const item = e.target.closest('.rni-item');
+      const item = e.target.closest('.rpt-item');
       if (!item) return;
       const id = item.dataset.id;
       const actBtn = e.target.closest('[data-act]');
@@ -999,8 +1133,8 @@
   function renderTabs() {
     const panel = doc.getElementById(PANEL_ID);
     if (!panel) return;
-    const cardBtn = panel.querySelector('.rni-tab[data-pool="card"]');
-    const globalBtn = panel.querySelector('.rni-tab[data-pool="global"]');
+    const cardBtn = panel.querySelector('.rpt-tab[data-pool="card"]');
+    const globalBtn = panel.querySelector('.rpt-tab[data-pool="global"]');
     const cardCount = cardStore ? cardStore.entries.length : 0;
     const globalCount = globalStore ? globalStore.entries.length : 0;
 
@@ -1010,15 +1144,15 @@
     cardBtn.title = cardStore ? '当前角色卡的条目（随角色卡导出）' : '没有打开角色卡';
     globalBtn.title = '跨角色卡通用的条目（随用户存档）';
 
-    cardBtn.classList.toggle('rni-active', state.pool === 'card');
-    globalBtn.classList.toggle('rni-active', state.pool === 'global');
+    cardBtn.classList.toggle('rpt-active', state.pool === 'card');
+    globalBtn.classList.toggle('rpt-active', state.pool === 'global');
 
     // 没有角色卡时给一行常驻提示（页签置灰容易被忽略）
-    let notice = panel.querySelector('.rni-notice');
+    let notice = panel.querySelector('.rpt-notice');
     if (!cardStore) {
       if (!notice) {
-        notice = el('div', { class: 'rni-notice', text: '没有打开角色卡，只能看到「通用」条目' });
-        panel.insertBefore(notice, panel.querySelector('.rni-search-row'));
+        notice = el('div', { class: 'rpt-notice', text: '没有打开角色卡，只能看到「通用」条目' });
+        panel.insertBefore(notice, panel.querySelector('.rpt-search-row'));
       }
     } else if (notice) {
       notice.remove();
@@ -1028,11 +1162,11 @@
   function renderList() {
     const panel = doc.getElementById(PANEL_ID);
     if (!panel) return;
-    const list = panel.querySelector('.rni-list');
+    const list = panel.querySelector('.rpt-list');
     list.textContent = '';
 
     if (!currentStore()) {
-      list.appendChild(el('div', { class: 'rni-empty' }, [
+      list.appendChild(el('div', { class: 'rpt-empty' }, [
         '当前没有打开角色卡，看不到「本卡」条目。',
         el('br'),
         '可以切到「通用」页签，或先打开一张角色卡。',
@@ -1043,7 +1177,7 @@
     const entries = filterEntries(currentEntries(), state.keyword);
     if (!entries.length) {
       const isSearching = !!String(state.keyword || '').trim();
-      list.appendChild(el('div', { class: 'rni-empty' }, isSearching ? [
+      list.appendChild(el('div', { class: 'rpt-empty' }, isSearching ? [
         '没有匹配的条目。',
       ] : [
         '这里还没有条目。',
@@ -1062,14 +1196,14 @@
     }
 
     for (const entry of entries) {
-      const item = el('div', { class: 'rni-item', dataset: { id: entry.id } }, [
-        el('div', { class: 'rni-item-main' }, [
-          el('div', { class: 'rni-item-title', text: entry.title || '（无标题）' }),
-          entry.desc ? el('div', { class: 'rni-item-desc', title: entry.desc, text: entry.desc }) : null,
+      const item = el('div', { class: 'rpt-item', dataset: { id: entry.id } }, [
+        el('div', { class: 'rpt-item-main' }, [
+          el('div', { class: 'rpt-item-title', text: entry.title || '（无标题）' }),
+          entry.desc ? el('div', { class: 'rpt-item-desc', title: entry.desc, text: entry.desc }) : null,
         ]),
-        el('div', { class: 'rni-item-actions' }, [
-          el('button', { class: 'rni-icon', title: '编辑', text: '✎', dataset: { act: 'edit' }, type: 'button' }),
-          el('button', { class: 'rni-icon rni-del', title: '删除', text: '×', dataset: { act: 'del' }, type: 'button' }),
+        el('div', { class: 'rpt-item-actions' }, [
+          el('button', { class: 'rpt-icon', title: '编辑', text: '✎', dataset: { act: 'edit' }, type: 'button' }),
+          el('button', { class: 'rpt-icon rpt-del', title: '删除', text: '×', dataset: { act: 'del' }, type: 'button' }),
         ]),
       ]);
       list.appendChild(item);
@@ -1084,7 +1218,7 @@
   function setStatus(text) {
     const panel = doc.getElementById(PANEL_ID);
     if (!panel) return;
-    const node = panel.querySelector('.rni-status');
+    const node = panel.querySelector('.rpt-status');
     if (node) node.textContent = text;
   }
 
@@ -1119,7 +1253,7 @@
 
   function openPanel() {
     if (host[INSTANCE_KEY] !== TOKEN) {
-      toast('检测到另一个角色名注入实例在运行，请到脚本库只保留一个', 'error');
+      toast('检测到另一个角色提词器实例在运行，请到脚本库只保留一个', 'error');
       return;
     }
     // 同一次点击里刚被"点击外部"关掉时不立刻重开，让入口表现为开关切换
@@ -1128,7 +1262,7 @@
     buildPanel();
     const panel = doc.getElementById(PANEL_ID);
     panel.style.visibility = 'hidden';
-    panel.classList.remove('rni-hidden');
+    panel.classList.remove('rpt-hidden');
     applyTheme(panel);
     applyPanelPosition();
     renderAll();
@@ -1137,13 +1271,13 @@
 
   function closePanel() {
     const panel = doc.getElementById(PANEL_ID);
-    if (panel) panel.classList.add('rni-hidden');
+    if (panel) panel.classList.add('rpt-hidden');
     state.lastClosedAt = Date.now();
   }
 
   const panelOpen = () => {
     const panel = doc.getElementById(PANEL_ID);
-    return !!(panel && !panel.classList.contains('rni-hidden'));
+    return !!(panel && !panel.classList.contains('rpt-hidden'));
   };
 
   function togglePanel() {
@@ -1162,7 +1296,7 @@
       const r = target.getBoundingClientRect();
       sx = x; sy = y; ox = r.left; oy = r.top;
       dragging = true; moved = false;
-      target.classList.add('rni-dragging');
+      target.classList.add('rpt-dragging');
     };
     const move = (x, y) => {
       if (!dragging) return;
@@ -1178,7 +1312,7 @@
     const end = () => {
       if (!dragging) return;
       dragging = false;
-      target.classList.remove('rni-dragging');
+      target.classList.remove('rpt-dragging');
       if (moved && typeof onEnd === 'function') {
         onEnd({
           x: parseFloat(target.style.left) || 0,
@@ -1242,8 +1376,8 @@
 
     const ball = el('div', {
       id: BALL_ID,
-      title: '角色名注入（点击打开，右键隐藏）',
-      text: '🎭',
+      title: '角色提词器（点击打开，右键隐藏）',
+      text: '🐧',
     });
     ball.style.left = clamp(pos.x, 8, Math.max(8, host.innerWidth - size - 8)) + 'px';
     ball.style.top = clamp(pos.y, 8, Math.max(8, host.innerHeight - size - 8)) + 'px';
@@ -1264,7 +1398,7 @@
     const end = () => {
       if (!dragging) return;
       dragging = false;
-      ball.classList.remove('rni-dragging');
+      ball.classList.remove('rpt-dragging');
       if (moved) {
         settings.ballPosition = {
           x: parseFloat(ball.style.left) || 0,
@@ -1278,7 +1412,7 @@
       const r = ball.getBoundingClientRect();
       sx = x; sy = y; ox = r.left; oy = r.top;
       dragging = true; moved = false;
-      ball.classList.add('rni-dragging');
+      ball.classList.add('rpt-dragging');
     };
 
     ball.addEventListener('mousedown', (e) => {
@@ -1333,20 +1467,20 @@
     state.editingId = editing ? editing.id : null;
 
     const titleInput = el('input', {
-      class: 'rni-input', type: 'text', placeholder: '例如：徐渭',
+      class: 'rpt-input', type: 'text', placeholder: '例如：徐渭',
       value: editing ? editing.title : '',
     });
     const descInput = el('input', {
-      class: 'rni-input', type: 'text', placeholder: '例如：{{user}}，冷漠剑客（只给自己看，不会注入）',
+      class: 'rpt-input', type: 'text', placeholder: '例如：{{user}}，冷漠剑客（只给自己看，不会注入）',
       value: editing ? editing.desc : '',
     });
     const contentArea = el('textarea', {
-      class: 'rni-textarea',
+      class: 'rpt-textarea',
       placeholder: '例如：徐渭：“|”',
     });
     contentArea.value = editing ? editing.content : '';
 
-    const preview = el('div', { class: 'rni-preview' });
+    const preview = el('div', { class: 'rpt-preview' });
     const renderPreview = () => {
       const raw = contentArea.value;
       if (!raw) {
@@ -1358,25 +1492,25 @@
       const before = parsed.text.slice(0, parsed.cursor);
       const after = parsed.text.slice(parsed.cursor);
       preview.appendChild(doc.createTextNode(before));
-      preview.appendChild(el('span', { class: 'rni-caret' }));
+      preview.appendChild(el('span', { class: 'rpt-caret' }));
       preview.appendChild(doc.createTextNode(after));
     };
     contentArea.addEventListener('input', renderPreview);
     renderPreview();
 
     const body = el('div', {}, [
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '标题' }),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '标题' }),
         titleInput,
       ]),
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '描述（只给自己看，不会注入）' }),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '描述（只给自己看，不会注入）' }),
         descInput,
       ]),
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '注入内容' }),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '注入内容' }),
         contentArea,
-        el('div', { class: 'rni-hint' }, [
+        el('div', { class: 'rpt-hint' }, [
           '用 ',
           el('kbd', { text: '|' }),
           ' 标记光标落点（注入后光标停在这里，标记本身不会出现）。',
@@ -1482,9 +1616,9 @@
     let mode = 'worldbook';
 
     const body = el('div', {});
-    const tabs = el('div', { class: 'rni-tabs' }, [
-      el('button', { class: 'rni-tab rni-active', text: '从世界书导入', dataset: { mode: 'worldbook' }, type: 'button' }),
-      el('button', { class: 'rni-tab', text: '批量粘贴', dataset: { mode: 'paste' }, type: 'button' }),
+    const tabs = el('div', { class: 'rpt-tabs' }, [
+      el('button', { class: 'rpt-tab rpt-active', text: '从世界书导入', dataset: { mode: 'worldbook' }, type: 'button' }),
+      el('button', { class: 'rpt-tab', text: '批量粘贴', dataset: { mode: 'paste' }, type: 'button' }),
     ]);
     const pane = el('div', {});
     body.appendChild(tabs);
@@ -1495,31 +1629,31 @@
 
     const switchMode = (next) => {
       mode = next;
-      tabs.querySelectorAll('.rni-tab').forEach((b) => b.classList.toggle('rni-active', b.dataset.mode === mode));
+      tabs.querySelectorAll('.rpt-tab').forEach((b) => b.classList.toggle('rpt-active', b.dataset.mode === mode));
       pane.textContent = '';
       if (mode === 'worldbook') buildWorldbookPane();
       else buildPastePane();
     };
     tabs.addEventListener('click', (e) => {
-      const btn = e.target.closest('.rni-tab');
+      const btn = e.target.closest('.rpt-tab');
       if (btn) switchMode(btn.dataset.mode);
     });
 
     /* ---- 批量粘贴 ---- */
     buildPastePane = () => {
       const area = el('textarea', {
-        class: 'rni-textarea',
+        class: 'rpt-textarea',
         placeholder: '一行一个名字，例如：\n徐渭\n沈砚\n柳娘',
       });
       area.style.minHeight = '180px';
 
-      pane.appendChild(el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '名字列表' }),
+      pane.appendChild(el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '名字列表' }),
         area,
-        el('div', { class: 'rni-hint', text: '每行生成一个条目，注入内容自动填成「名字：“|”」，生成后可以逐个改。' }),
+        el('div', { class: 'rpt-hint', text: '每行生成一个条目，注入内容自动填成「名字：“|”」，生成后可以逐个改。' }),
       ]));
 
-      const stats = el('div', { class: 'rni-hint' });
+      const stats = el('div', { class: 'rpt-hint' });
       const refresh = () => {
         const n = area.value.split('\n').map((s) => s.trim()).filter(Boolean).length;
         stats.textContent = n ? `将生成 ${n} 个条目` : '';
@@ -1557,10 +1691,10 @@
         return res.ok;
       };
 
-      const actions = el('div', { class: 'rni-actions' }, [
-        el('button', { class: 'rni-btn', text: '取消', type: 'button', onclick: closeModal }),
+      const actions = el('div', { class: 'rpt-actions' }, [
+        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: closeModal }),
         el('button', {
-          class: 'rni-btn rni-primary', text: '导入', type: 'button',
+          class: 'rpt-btn rpt-primary', text: '导入', type: 'button',
           onclick: async (e) => {
             e.target.disabled = true;
             const ok = await doImport();
@@ -1574,16 +1708,16 @@
 
     /* ---- 世界书扫描 ---- */
     buildWorldbookPane = () => {
-      const hint = el('div', { class: 'rni-hint', text: '正在读取世界书…' });
+      const hint = el('div', { class: 'rpt-hint', text: '正在读取世界书…' });
       pane.appendChild(hint);
 
-      const status = el('div', { class: 'rni-hint' });
-      const filterInput = el('input', { class: 'rni-input', type: 'text', placeholder: '🔍 过滤条目名或内容…' });
-      const listBox = el('div', { class: 'rni-check-list' });
-      const toolbar = el('div', { class: 'rni-row' }, [
-        el('button', { class: 'rni-btn', text: '全选', type: 'button' }),
-        el('button', { class: 'rni-btn', text: '全不选', type: 'button' }),
-        el('button', { class: 'rni-btn', text: '反选', type: 'button' }),
+      const status = el('div', { class: 'rpt-hint' });
+      const filterInput = el('input', { class: 'rpt-input', type: 'text', placeholder: '🔍 过滤条目名或内容…' });
+      const listBox = el('div', { class: 'rpt-check-list' });
+      const toolbar = el('div', { class: 'rpt-row' }, [
+        el('button', { class: 'rpt-btn', text: '全选', type: 'button' }),
+        el('button', { class: 'rpt-btn', text: '全不选', type: 'button' }),
+        el('button', { class: 'rpt-btn', text: '反选', type: 'button' }),
       ]);
       const includeGlobalLabel = el('label', {}, [
         el('input', { type: 'checkbox' }),
@@ -1603,7 +1737,7 @@
         });
 
         if (!shown.length) {
-          listBox.appendChild(el('div', { class: 'rni-hint', text: candidates.length ? '没有匹配的条目。' : '没有可导入的新条目。' }));
+          listBox.appendChild(el('div', { class: 'rpt-hint', text: candidates.length ? '没有匹配的条目。' : '没有可导入的新条目。' }));
         }
 
         for (const c of shown) {
@@ -1614,11 +1748,11 @@
             else checked.delete(c.name);
             updateStatus();
           });
-          const item = el('label', { class: 'rni-check-item' }, [
+          const item = el('label', { class: 'rpt-check-item' }, [
             cb,
-            el('div', { class: 'rni-check-main' }, [
-              el('div', { class: 'rni-check-name', text: c.name }),
-              c.preview ? el('div', { class: 'rni-check-preview', title: c.preview, text: c.preview }) : null,
+            el('div', { class: 'rpt-check-main' }, [
+              el('div', { class: 'rpt-check-name', text: c.name }),
+              c.preview ? el('div', { class: 'rpt-check-preview', title: c.preview, text: c.preview }) : null,
             ]),
           ]);
           listBox.appendChild(item);
@@ -1637,7 +1771,7 @@
       });
 
       toolbar.addEventListener('click', (e) => {
-        const btn = e.target.closest('.rni-btn');
+        const btn = e.target.closest('.rpt-btn');
         if (!btn) return;
         const kw = String(filterInput.value || '').trim().toLowerCase();
         const visible = candidates.filter((c) => !kw || c.name.toLowerCase().includes(kw) || c.preview.toLowerCase().includes(kw));
@@ -1705,10 +1839,10 @@
         load();
       });
 
-      const actions = el('div', { class: 'rni-actions' }, [
-        el('button', { class: 'rni-btn', text: '取消', type: 'button', onclick: closeModal }),
+      const actions = el('div', { class: 'rpt-actions' }, [
+        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: closeModal }),
         el('button', {
-          class: 'rni-btn rni-primary', text: '导入所选', type: 'button',
+          class: 'rpt-btn rpt-primary', text: '导入所选', type: 'button',
           onclick: async (e) => {
             if (!checked.size) { toast('还没有选中任何条目', 'warning'); return; }
             if (!storeStillValid(state.pool, store)) return;
@@ -1745,8 +1879,8 @@
         }),
       ]);
 
-      pane.appendChild(el('div', { class: 'rni-field' }, [filterInput]));
-      pane.appendChild(el('div', { class: 'rni-row' }, [
+      pane.appendChild(el('div', { class: 'rpt-field' }, [filterInput]));
+      pane.appendChild(el('div', { class: 'rpt-row' }, [
         el('div', { style: 'flex:1 1 auto' }, [includeGlobalLabel]),
         toolbar,
       ]));
@@ -1766,15 +1900,142 @@
     switchMode('worldbook');
   }
 
+  /* ==================== 预设库 ==================== */
+
+  /**
+   * 内置预设库：列出常用格式片段供勾选。
+   * 默认不放进任何池子——用户勾了才加，且固定加到「通用」池（这些是通用格式，不属于某张卡）。
+   */
+  function openLibraryDialog() {
+    const target = globalStore;
+    if (!target) { toast('通用池不可用', 'error'); return; }
+
+    const existingTitles = new Set(target.entries.map((x) => x.title));
+    const checked = new Set();
+    const listBox = el('div', { class: 'rpt-check-list' });
+    listBox.style.maxHeight = '360px';
+
+    const render = () => {
+      listBox.textContent = '';
+      let lastGroup = null;
+      for (const item of LIBRARY) {
+        if (item.group !== lastGroup) {
+          lastGroup = item.group;
+          listBox.appendChild(el('div', { class: 'rpt-lib-group', text: item.group }));
+        }
+        const exists = existingTitles.has(item.title);
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = checked.has(item.title);
+        cb.disabled = exists;
+        cb.addEventListener('change', () => {
+          if (cb.checked) checked.add(item.title);
+          else checked.delete(item.title);
+          updateStatus();
+        });
+        listBox.appendChild(el('label', {
+          class: `rpt-check-item${exists ? ' rpt-exists' : ''}`,
+        }, [
+          cb,
+          el('div', { class: 'rpt-check-main' }, [
+            el('div', { class: 'rpt-check-name' }, [
+              item.title,
+              exists ? el('span', { class: 'rpt-tag', text: '已存在' }) : null,
+            ]),
+            el('div', { class: 'rpt-check-preview' }, [
+              item.desc,
+              el('span', { class: 'rpt-lib-sample', text: parseContent(item.content).text || item.content }),
+            ]),
+          ]),
+        ]));
+      }
+      updateStatus();
+    };
+
+    const status = el('div', { class: 'rpt-hint' });
+    const updateStatus = () => {
+      const total = LIBRARY.filter((i) => !existingTitles.has(i.title)).length;
+      status.textContent = `可添加 ${total} 项，已选 ${checked.size} 项`;
+    };
+
+    const toolbar = el('div', { class: 'rpt-row' }, [
+      el('button', {
+        class: 'rpt-btn', text: '全选', type: 'button',
+        onclick: () => {
+          for (const i of LIBRARY) if (!existingTitles.has(i.title)) checked.add(i.title);
+          render();
+        },
+      }),
+      el('button', {
+        class: 'rpt-btn', text: '全不选', type: 'button',
+        onclick: () => { checked.clear(); render(); },
+      }),
+    ]);
+
+    const body = el('div', {}, [
+      el('div', { class: 'rpt-hint', text: '这些是常用格式片段，勾选后加进「通用」池（跨角色卡通用）。加入后可以随时编辑或删除。' }),
+      toolbar,
+      listBox,
+      status,
+    ]);
+
+    render();
+
+    showModal({
+      title: '预设库',
+      contentEl: body,
+      wide: true,
+      buttons: [
+        { text: '取消' },
+        {
+          text: '加入通用池',
+          primary: true,
+          onClick: async () => {
+            if (!checked.size) { toast('还没有勾选任何项', 'warning'); return false; }
+            if (!storeStillValid('global', target)) return false;
+            const picked = LIBRARY.filter((i) => checked.has(i.title));
+            const res = await mutateStore('global', (live) => {
+              const titles = live.entries.map((x) => x.title);
+              for (const item of picked) {
+                const title = uniqueTitle(item.title, titles);
+                titles.push(title);
+                live.entries.push(normalizeEntry({
+                  title,
+                  desc: item.desc,
+                  content: item.content,
+                  source: { type: 'library', libraryTitle: item.title },
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                }));
+              }
+            });
+            if (res.ok) {
+              renderAll();
+              setStatus(`已从预设库加入 ${picked.length} 项`);
+              toast(`已加入 ${picked.length} 项到通用池`, 'success');
+            }
+            return res.ok;
+          },
+        },
+      ],
+    });
+  }
+
   /* ==================== 设置 ==================== */
 
   function openSettings() {
-    const modeSelect = el('select', { class: 'rni-input' }, [
+    const modeSelect = el('select', { class: 'rpt-input' }, [
       el('option', { value: 'append', text: '追加到末尾（默认）' }),
       el('option', { value: 'replace', text: '替换输入框全部内容' }),
       el('option', { value: 'cursor', text: '插入到当前光标处' }),
     ]);
     modeSelect.value = settings.injectMode;
+
+    const sepSelect = el('select', { class: 'rpt-input' }, [
+      el('option', { value: 'newline', text: '另起一行（默认）' }),
+      el('option', { value: 'space', text: '空一格' }),
+      el('option', { value: 'none', text: '直接接上，不分隔' }),
+    ]);
+    sepSelect.value = settings.appendSeparator || 'newline';
 
     const autoClose = el('input', { type: 'checkbox' });
     autoClose.checked = !!settings.autoCloseAfterInject;
@@ -1782,7 +2043,7 @@
     const showBall = el('input', { type: 'checkbox' });
     showBall.checked = !!settings.showFloatingBall;
 
-    const themeSelect = el('select', { class: 'rni-input' }, [
+    const themeSelect = el('select', { class: 'rpt-input' }, [
       el('option', { value: 'auto', text: '跟随酒馆（自动判断明暗）' }),
       el('option', { value: 'dark', text: '始终用深色' }),
       el('option', { value: 'light', text: '始终用浅色' }),
@@ -1790,34 +2051,65 @@
     themeSelect.value = settings.theme || 'auto';
 
     const body = el('div', {}, [
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '注入方式' }),
+      el('div', { class: 'rpt-hint', style: 'margin-bottom:12px;' }, [
+        '把常写的角色名、台词格式存成条目，点一下注入输入框，光标停在预设位置。',
+        '注入内容里用 ',
+        el('kbd', { text: '|' }),
+        ' 标记光标落点。',
+      ]),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '注入方式' }),
         modeSelect,
       ]),
-      el('div', { class: 'rni-row' }, [
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '追加时与已有内容的分隔符（只对「追加」有效）' }),
+        sepSelect,
+      ]),
+      el('div', { class: 'rpt-row' }, [
         el('label', {}, [autoClose, ' 注入后自动收起面板']),
       ]),
-      el('div', { class: 'rni-row' }, [
+      el('div', { class: 'rpt-row' }, [
         el('label', {}, [showBall, ' 显示悬浮球']),
       ]),
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '面板配色' }),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '面板配色' }),
         themeSelect,
       ]),
-      el('hr', { style: 'border:none;border-top:1px solid var(--rni-border);margin:14px 0;' }),
-      el('div', { class: 'rni-row' }, [
-        el('button', { class: 'rni-btn', text: '导出通用池条目', type: 'button', onclick: exportEntries }),
-        el('button', { class: 'rni-btn', text: '导入条目', type: 'button', onclick: openImportJson }),
+      el('hr', { style: 'border:none;border-top:1px solid var(--rpt-border);margin:14px 0;' }),
+
+      el('div', { class: 'rpt-row' }, [
+        el('button', { class: 'rpt-btn', text: '📚 预设库', type: 'button', onclick: openLibraryDialog }),
+        el('button', { class: 'rpt-btn', text: '导出条目…', type: 'button', onclick: openExportDialog }),
+        el('button', { class: 'rpt-btn', text: '导入条目…', type: 'button', onclick: openImportJson }),
       ]),
-      el('div', { class: 'rni-hint' }, [
-        `角色名注入 v${SCRIPT_VERSION}`,
+
+      el('div', { class: 'rpt-hint' }, [
+        '条目存在哪：',
         el('br'),
-        '本卡池条目随角色卡导出；通用池条目随用户存档。导出按钮导出的是通用池。',
+        '· 「本卡」条目存在**角色卡自己**里（角色卡数据的 extensions 字段），所以分享角色卡时会一起带走；',
+        '反过来，**更新或替换角色卡会让本卡条目变成新卡里的内容**——新卡没带就会清空。更新卡前请先导出备份。',
+        el('br'),
+        '· 「通用」条目存在酒馆全局变量里，跨角色卡通用，随用户存档。',
+      ]),
+
+      el('hr', { style: 'border:none;border-top:1px solid var(--rpt-border);margin:14px 0;' }),
+
+      el('div', { class: 'rpt-danger-zone' }, [
+        el('div', { style: 'font-weight:600;margin-bottom:6px;' }, ['危险操作']),
+        el('button', { class: 'rpt-btn rpt-danger', text: '清空数据…', type: 'button', onclick: openClearData }),
+        el('div', { class: 'rpt-hint', text: '清空前建议先导出备份。' }),
+      ]),
+
+      el('div', { class: 'rpt-hint' }, [
+        `角色提词器 v${SCRIPT_VERSION}`,
+        el('br'),
+        '要求 SillyTavern 1.18+ / 酒馆助手 4.x+',
       ]),
     ]);
 
     const save = async () => {
       settings.injectMode = modeSelect.value;
+      settings.appendSeparator = sepSelect.value;
       settings.autoCloseAfterInject = autoClose.checked;
       settings.showFloatingBall = showBall.checked;
       settings.theme = themeSelect.value;
@@ -1839,36 +2131,216 @@
     });
   }
 
-  function exportEntries() {
-    const store = globalStore;
-    if (!store) return;
-    if (!store.entries.length) { toast('通用池里还没有条目', 'warning'); return; }
-    const payload = {
-      __角色名注入__: true,
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      entries: store.entries,
+  /* ==================== 清空数据 ==================== */
+
+  /** 清空指定池（走 mutateStore，失败会回滚） */
+  async function clearOnePool(pool) {
+    if (pool === 'card' && !cardStore) {
+      toast('没有打开角色卡，无法清空本卡池', 'warning');
+      return false;
+    }
+    const res = await mutateStore(pool, (live) => {
+      live.entries = [];
+      live.importedWorldbookEntries = {};
+    });
+    if (res.ok) {
+      renderAll();
+      setStatus(`已清空「${poolName(pool)}」池`);
+      toast(`「${poolName(pool)}」池已清空`, 'success');
+    }
+    return res.ok;
+  }
+
+  /** 三次确认后清空 */
+  async function clearPools(which) {
+    const label = which === 'both' ? '通用池 + 本卡池' : `「${poolName(which)}」池`;
+    const countOf = (pool) => (pool === 'card' ? (cardStore ? cardStore.entries.length : 0) : (globalStore ? globalStore.entries.length : 0));
+    const total = which === 'both' ? countOf('global') + countOf('card') : countOf(which);
+
+    if (total === 0) { toast('要清空的池子里没有条目', 'warning'); return; }
+
+    const steps = [
+      `即将清空 ${label}，共 ${total} 条。这个操作不可撤销，确定继续吗？`,
+      `再确认一次：${label} 的条目会被**全部删除**，包括标题、描述和注入内容。`,
+      `最后一次确认：删除后无法恢复（除非你之前导出过备份）。真的清空吗？`,
+    ];
+
+    for (let i = 0; i < steps.length; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await askConfirm(
+        `清空 ${label}（第 ${i + 1}/3 次确认）`,
+        steps[i],
+        { danger: true, okText: i === 2 ? '确认清空' : '继续' },
+      );
+      if (!ok) { toast('已取消清空'); return; }
+    }
+
+    if (which === 'global' || which === 'both') await clearOnePool('global');
+    if ((which === 'card' || which === 'both') && cardStore) await clearOnePool('card');
+  }
+
+  function openClearData() {
+    const hasCard = !!cardStore;
+    const gCount = globalStore ? globalStore.entries.length : 0;
+    const cCount = cardStore ? cardStore.entries.length : 0;
+
+    const makeBtn = (text, which, disabled) => {
+      const btn = el('button', {
+        class: 'rpt-btn rpt-danger', text, type: 'button',
+        onclick: async () => {
+          closeModal();
+          // 等弹窗关闭再弹确认，避免确认框叠在设置框上
+          setTimeout(() => { void clearPools(which); }, 0);
+        },
+      });
+      btn.disabled = !!disabled;
+      if (disabled) btn.style.opacity = '.45';
+      return btn;
     };
+
+    const body = el('div', {}, [
+      el('div', { class: 'rpt-hint' }, [
+        '三个选项都是**不可撤销**的，每个都需要连续确认三次。',
+        el('br'),
+        '注意：本卡池只能清空**当前打开的那张卡**。其他卡的数据要逐张打开才能清。',
+      ]),
+      el('div', { class: 'rpt-field', style: 'margin-top:12px;' }, [
+        el('div', { style: 'font-weight:600;margin-bottom:6px;' }, [`通用池（${gCount} 条）`]),
+        makeBtn('清空通用池', 'global', gCount === 0),
+      ]),
+      el('div', { class: 'rpt-field' }, [
+        el('div', { style: 'font-weight:600;margin-bottom:6px;' }, [
+          hasCard ? `本卡池（${cCount} 条）` : '本卡池（没有打开角色卡）',
+        ]),
+        makeBtn('清空本卡池', 'card', !hasCard || cCount === 0),
+      ]),
+      el('div', { class: 'rpt-field' }, [
+        el('div', { style: 'font-weight:600;margin-bottom:6px;' }, ['两个一起清']),
+        makeBtn('清空通用池 + 本卡池', 'both', gCount + cCount === 0),
+      ]),
+    ]);
+
+    showModal({
+      title: '清空数据',
+      contentEl: body,
+      buttons: [{ text: '取消' }],
+    });
+  }
+
+  /* ==================== 导出 ==================== */
+
+  function openExportDialog() {
+    const gCount = globalStore ? globalStore.entries.length : 0;
+    const cCount = cardStore ? cardStore.entries.length : 0;
+    const hasCard = !!cardStore;
+
+    const target = el('select', { class: 'rpt-input' }, [
+      el('option', { value: 'global', text: `通用池（${gCount} 条）` }),
+      el('option', { value: 'card', text: hasCard ? `本卡池（${cCount} 条）` : '本卡池（没有打开角色卡）' }),
+      el('option', { value: 'both', text: `两个都导（${gCount} + ${cCount} 条）` }),
+    ]);
+    if (!hasCard) {
+      const opt = target.querySelector('option[value="card"]');
+      if (opt) opt.disabled = true;
+    }
+    // 有卡时默认导出本卡池——因为卡池有"更新卡被冲掉"的风险，备份它更重要
+    target.value = hasCard ? 'card' : 'global';
+
+    const body = el('div', {}, [
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '导出哪些条目' }),
+        target,
+      ]),
+      el('div', { class: 'rpt-hint' }, [
+        '本卡池条目虽然会随角色卡一起导出，但更新/替换角色卡时会被新卡覆盖，',
+        '所以更新卡之前单独导出一份本卡池是稳妥做法。',
+      ]),
+    ]);
+
+    showModal({
+      title: '导出条目',
+      contentEl: body,
+      buttons: [
+        { text: '取消' },
+        {
+          text: '导出',
+          primary: true,
+          onClick: () => {
+            const which = target.value;
+            if (which === 'card' && !hasCard) { toast('没有打开角色卡', 'warning'); return false; }
+            const payload = {
+              __角色提词器__: true,
+              version: 1,
+              exportedAt: new Date().toISOString(),
+            };
+            let n = 0;
+            if (which === 'global' || which === 'both') {
+              payload.global = globalStore ? globalStore.entries : [];
+              n += payload.global.length;
+            }
+            if ((which === 'card' || which === 'both') && cardStore) {
+              payload.card = cardStore.entries;
+              payload.cardName = getCurrentCardName();
+              n += payload.card.length;
+            }
+            if (!n) { toast('要导出的池子里没有条目', 'warning'); return false; }
+            downloadJson(payload, which, n);
+            return true;
+          },
+        },
+      ],
+    });
+  }
+
+  function getCurrentCardName() {
+    try {
+      const fn = G('getCurrentCharacterName');
+      if (fn) return fn() || '';
+    } catch (e) { /* ignore */ }
+    return '';
+  }
+
+  function downloadJson(payload, which, count) {
     const text = JSON.stringify(payload, null, 2);
+    const suffix = which === 'both' ? '全部' : poolName(which);
+    const stamp = new Date().toISOString().slice(0, 10);
     try {
       const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = doc.createElement('a');
       a.href = url;
-      a.download = `角色名注入-通用池-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `角色提词器-${suffix}-${stamp}.json`;
       doc.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
-      toast(`已导出 ${store.entries.length} 个条目`, 'success');
+      toast(`已导出 ${count} 条`, 'success');
     } catch (e) {
+      // 下载不可用（某些内嵌环境）：退回复制到剪贴板
       copyToClipboard(text);
       toast('已复制到剪贴板（文件下载不可用）');
     }
   }
 
+  /* ==================== 导入 ==================== */
+
+  /** 把导入文件解析成「每个池要导入哪些条目」 */
+  function parseImportPayload(data) {
+    if (!data || typeof data !== 'object') return null;
+    // 新格式：global / card 分开；旧格式（v1.0.0）：entries 就是通用池
+    const out = { global: null, card: null, cardName: '' };
+    if (Array.isArray(data.global)) out.global = data.global;
+    if (Array.isArray(data.card)) out.card = data.card;
+    if (out.global === null && out.card === null && Array.isArray(data.entries)) {
+      out.global = data.entries;
+    }
+    if (typeof data.cardName === 'string') out.cardName = data.cardName;
+    if (out.global === null && out.card === null) return null;
+    return out;
+  }
+
   function openImportJson() {
-    const area = el('textarea', { class: 'rni-textarea', placeholder: '把导出的 JSON 粘贴到这里' });
+    const area = el('textarea', { class: 'rpt-textarea', placeholder: '把导出的 JSON 粘贴到这里' });
     area.style.minHeight = '160px';
     const fileInput = el('input', { type: 'file', accept: '.json,application/json' });
     fileInput.style.display = 'none';
@@ -1881,11 +2353,11 @@
     });
 
     const body = el('div', {}, [
-      el('div', { class: 'rni-field' }, [
-        el('label', { class: 'rni-label', text: '粘贴 JSON' }),
+      el('div', { class: 'rpt-field' }, [
+        el('label', { class: 'rpt-label', text: '粘贴 JSON' }),
         area,
-        el('div', { class: 'rni-hint' }, [
-          el('button', { class: 'rni-btn', text: '选择文件…', type: 'button', onclick: () => fileInput.click() }),
+        el('div', { class: 'rpt-hint' }, [
+          el('button', { class: 'rpt-btn', text: '选择文件…', type: 'button', onclick: () => fileInput.click() }),
           ' 导入时会检测标题重名，让你逐个决定怎么处理。',
         ]),
         fileInput,
@@ -1900,106 +2372,180 @@
         toast('JSON 解析失败：' + (e && e.message ? e.message : e), 'error');
         return false;
       }
-      const incoming = Array.isArray(data && data.entries) ? data.entries : null;
-      if (!incoming) { toast('这份 JSON 里没有 entries 字段', 'error'); return false; }
-
-      const store = globalStore;
-      if (!store) return false;
-
-      const conflicts = [];
-      for (const raw of incoming) {
-        const entry = normalizeEntry(raw);
-        const dup = store.entries.find((x) => x.title === entry.title);
-        if (dup) conflicts.push({ entry, dup });
+      const parsed = parseImportPayload(data);
+      if (!parsed) {
+        toast('这份 JSON 里没有可导入的条目（缺少 global / card / entries 字段）', 'error');
+        return false;
       }
 
-      const apply = async (resolutions) => {
-        if (!storeStillValid('global', store)) return false;
+      const gIncoming = (parsed.global || []).map(normalizeEntry);
+      const cIncoming = (parsed.card || []).map(normalizeEntry);
+      const cardAvailable = !!cardStore;
+      const sourceCardName = parsed.cardName || '';
+
+      /** 按目标选择算出「每个池要导入哪些条目」 */
+      const plan = (which) => {
+        const out = { global: [], card: [] };
+        if (which === 'global') {
+          out.global = gIncoming.concat(cIncoming);
+        } else if (which === 'card') {
+          out.card = gIncoming.concat(cIncoming);
+        } else {
+          out.global = gIncoming.slice();
+          out.card = cIncoming.slice();
+          // 没有角色卡时本卡条目无处可放，退回通用池
+          if (!cardAvailable && out.card.length) {
+            out.global = out.global.concat(out.card);
+            out.card = [];
+          }
+        }
+        return out;
+      };
+
+      // ---- 目标选择 ----
+      const targetSelect = el('select', { class: 'rpt-input' }, [
+        el('option', { value: 'bySource', text: '按来源归位（通用→通用池，本卡→本卡池）' }),
+        el('option', { value: 'global', text: '全部导入通用池' }),
+        el('option', { value: 'card', text: cardAvailable ? '全部导入本卡池' : '全部导入本卡池（没有打开角色卡）' }),
+      ]);
+      const cardOpt = targetSelect.querySelector('option[value="card"]');
+      if (!cardAvailable && cardOpt) cardOpt.disabled = true;
+      if (!cardAvailable) targetSelect.value = 'global';
+      else if (!cIncoming.length && gIncoming.length) targetSelect.value = 'bySource';
+      else if (!gIncoming.length && cIncoming.length) targetSelect.value = 'bySource';
+
+      const summary = el('div', { class: 'rpt-hint' });
+      const conflictBox = el('div', {});
+      const resolutions = new Map();
+
+      const renderPlan = () => {
+        const which = targetSelect.value;
+        const p = plan(which);
+
+        summary.textContent = '';
+        summary.appendChild(doc.createTextNode(
+          `文件里：通用池 ${gIncoming.length} 条${sourceCardName ? `，来自「${sourceCardName}」的本卡池 ${cIncoming.length} 条` : cIncoming.length ? `，本卡池 ${cIncoming.length} 条` : ''}。`,
+        ));
+        summary.appendChild(el('br'));
+        summary.appendChild(doc.createTextNode(
+          `将导入：通用池 ${p.global.length} 条，本卡池 ${p.card.length} 条。`,
+        ));
+        if (!cardAvailable && cIncoming.length) {
+          summary.appendChild(el('br'));
+          summary.appendChild(doc.createTextNode('（没有打开角色卡，本卡池条目已改投通用池）'));
+        }
+
+        // 冲突检测
+        resolutions.clear();
+        conflictBox.textContent = '';
+        const conflicts = [];
+        for (const pool of ['global', 'card']) {
+          const store = pool === 'card' ? cardStore : globalStore;
+          if (!store) continue;
+          for (const entry of p[pool]) {
+            const dup = store.entries.find((x) => x.title === entry.title);
+            if (dup) conflicts.push({ pool, entry, dup });
+          }
+        }
+        if (!conflicts.length) return;
+
+        conflictBox.appendChild(el('div', { class: 'rpt-hint', text: `有 ${conflicts.length} 个标题重名，请逐个选择处理方式：` }));
+        const listBox = el('div', { class: 'rpt-check-list' });
+        for (const { pool, entry, dup } of conflicts) {
+          const key = `${pool}::${entry.title}`;
+          const sel = el('select', { class: 'rpt-input' }, [
+            el('option', { value: 'skip', text: '保留我的（跳过这条）' }),
+            el('option', { value: 'theirs', text: '用对方的覆盖' }),
+            el('option', { value: 'both', text: '两个都留' }),
+          ]);
+          sel.addEventListener('change', () => resolutions.set(key, sel.value));
+          resolutions.set(key, 'skip');
+          listBox.appendChild(el('div', { class: 'rpt-check-item' }, [
+            el('div', { class: 'rpt-check-main' }, [
+              el('div', { class: 'rpt-check-name', text: `${entry.title}　（${poolName(pool)}池）` }),
+              el('div', { class: 'rpt-check-preview', text: `我的：${dup.content || '（空）'}` }),
+              el('div', { class: 'rpt-check-preview', text: `对方：${entry.content || '（空）'}` }),
+              sel,
+            ]),
+          ]));
+        }
+        conflictBox.appendChild(listBox);
+      };
+
+      targetSelect.addEventListener('change', renderPlan);
+
+      const body = el('div', {}, [
+        el('div', { class: 'rpt-field' }, [
+          el('label', { class: 'rpt-label', text: '导入到哪' }),
+          targetSelect,
+        ]),
+        summary,
+        conflictBox,
+      ]);
+
+      const apply = async () => {
+        const which = targetSelect.value;
+        const p = plan(which);
         let added = 0;
         let replaced = 0;
+        let failed = false;
 
-        const res = await mutateStore('global', (live) => {
-          for (const raw of incoming) {
-            const entry = normalizeEntry(raw);
-            const idx = live.entries.findIndex((x) => x.title === entry.title);
-            if (idx < 0) {
-              live.entries.push(entry);
-              added++;
-              continue;
-            }
-            const how = resolutions.get(entry.title) || 'skip';
-            if (how === 'theirs') {
-              entry.id = live.entries[idx].id;
-              live.entries[idx] = entry;
-              replaced++;
-            } else if (how === 'both') {
-              const titles = live.entries.map((x) => x.title);
-              entry.title = uniqueTitle(entry.title, titles);
-              entry.id = newId();
-              live.entries.push(entry);
-              added++;
-            }
-          }
-        });
+        for (const pool of ['global', 'card']) {
+          const list = p[pool];
+          if (!list.length) continue;
+          const store = pool === 'card' ? cardStore : globalStore;
+          if (!store || !storeStillValid(pool, store)) { failed = true; break; }
 
-        if (res.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await mutateStore(pool, (live) => {
+            for (const entry of list) {
+              const idx = live.entries.findIndex((x) => x.title === entry.title);
+              if (idx < 0) {
+                live.entries.push(entry);
+                added++;
+                continue;
+              }
+              const how = resolutions.get(`${pool}::${entry.title}`) || 'skip';
+              if (how === 'theirs') {
+                entry.id = live.entries[idx].id;
+                live.entries[idx] = entry;
+                replaced++;
+              } else if (how === 'both') {
+                const titles = live.entries.map((x) => x.title);
+                entry.title = uniqueTitle(entry.title, titles);
+                entry.id = newId();
+                live.entries.push(entry);
+                added++;
+              }
+            }
+          });
+          if (!res.ok) { failed = true; break; }
+        }
+
+        if (!failed) {
           renderAll();
           setStatus(`导入完成：新增 ${added}，覆盖 ${replaced}`);
           toast(`导入完成：新增 ${added}，覆盖 ${replaced}`, 'success');
         }
-        return res.ok;
+        return !failed;
       };
 
-      if (!conflicts.length) {
-        const ok = await apply(new Map());
-        if (ok) closeModal();
-        return ok;
-      }
-
-      // 有冲突：逐个选
-      const resolutions = new Map();
-      const listBox = el('div', { class: 'rni-check-list' });
-      for (const { entry, dup } of conflicts) {
-        const sel = el('select', { class: 'rni-input' }, [
-          el('option', { value: 'skip', text: '保留我的（跳过这条）' }),
-          el('option', { value: 'theirs', text: '用对方的覆盖' }),
-          el('option', { value: 'both', text: '两个都留' }),
-        ]);
-        sel.addEventListener('change', () => resolutions.set(entry.title, sel.value));
-        resolutions.set(entry.title, 'skip');
-        listBox.appendChild(el('div', { class: 'rni-check-item' }, [
-          el('div', { class: 'rni-check-main' }, [
-            el('div', { class: 'rni-check-name', text: entry.title }),
-            el('div', { class: 'rni-check-preview', text: `我的：${dup.content || '（空）'}` }),
-            el('div', { class: 'rni-check-preview', text: `对方：${entry.content || '（空）'}` }),
-            sel,
-          ]),
-        ]));
-      }
-
-      const conflictBody = el('div', {}, [
-        el('div', { class: 'rni-hint', text: `有 ${conflicts.length} 个标题重名，请逐个选择处理方式：` }),
-        listBox,
-      ]);
+      renderPlan();
 
       showModal({
-        title: '处理重名冲突',
-        contentEl: conflictBody,
+        title: '确认导入',
+        contentEl: body,
         wide: true,
         buttons: [
           { text: '取消' },
-          {
-            text: '确认导入',
-            primary: true,
-            onClick: async () => { await apply(resolutions); },
-          },
+          { text: '确认导入', primary: true, onClick: apply },
         ],
       });
-      return false; // 不关闭当前弹窗，交给冲突弹窗处理
+      return false; // 不关闭当前弹窗，交给确认弹窗处理
     };
 
     showModal({
-      title: '导入条目（导入到通用池）',
+      title: '导入条目',
       contentEl: body,
       buttons: [
         { text: '取消' },
@@ -2035,8 +2581,8 @@
 
     const entry = el('div', {
       id: ENTRY_ID,
-      title: '角色名注入',
-      text: '🎭',
+      title: '角色提词器',
+      text: '🐧',
     });
     entry.style.cssText = 'cursor:pointer;display:flex;align-items:center;justify-content:center;width:28px;height:28px;font-size:16px;';
     entry.addEventListener('click', togglePanel);
@@ -2058,8 +2604,22 @@
     }
   }
 
+  /**
+   * 点击是否落在酒馆输入区里。
+   * 必须豁免：用户会先点输入框把光标挪到想插入的位置，再点条目注入。
+   * 如果这时面板被"点击外部"逻辑关掉，"插入到光标处"就没法用了。
+   */
+  function isInSendArea(target) {
+    try {
+      if (!target || typeof target.closest !== 'function') return false;
+      return !!target.closest('#form_sheld, #send_form, #send_textarea, #nonQRFormItems, #rightSendForm');
+    } catch (e) {
+      return false;
+    }
+  }
+
   function registerGlobalHandlers() {
-    // 点击面板外部关闭（弹窗打开时不生效，点悬浮球/入口按钮不算外部）
+    // 点击面板外部关闭（弹窗打开时不生效；点悬浮球/入口按钮/输入区不算外部）
     onPage(doc, 'mousedown', (e) => {
       if (!panelOpen() || modalOpen()) return;
       const panel = doc.getElementById(PANEL_ID);
@@ -2068,6 +2628,7 @@
       if (ball && ball.contains(e.target)) return;
       const entry = doc.getElementById(ENTRY_ID);
       if (entry && entry.contains(e.target)) return;
+      if (isInSendArea(e.target)) return;
       closePanel();
     }, true);
 
@@ -2081,7 +2642,7 @@
     // 窗口尺寸变化：把面板与悬浮球夹回视口
     onPage(host, 'resize', () => {
       const panel = doc.getElementById(PANEL_ID);
-      if (panel && !panel.classList.contains('rni-hidden')) {
+      if (panel && !panel.classList.contains('rpt-hidden')) {
         panel.style.left = clamp(parseFloat(panel.style.left) || 8, 8, Math.max(8, host.innerWidth - panel.offsetWidth - 8)) + 'px';
         panel.style.top = clamp(parseFloat(panel.style.top) || 8, 8, Math.max(8, host.innerHeight - panel.offsetHeight - 8)) + 'px';
       }
@@ -2122,8 +2683,8 @@
       const old = doc.getElementById(id);
       if (old) old.remove();
       const btn = el('div', {
-        id,
-        title: `角色名注入启动失败：${msg}\n（点一下复制错误信息）`,
+        id: `${ENTRY_ID}-fatal`,
+        title: `角色提词器启动失败：${msg}\n（点一下复制错误信息）`,
         text: '❗',
       });
       btn.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:999990;width:36px;height:36px;'
@@ -2154,7 +2715,7 @@
     }
 
     if (problems.length) {
-      const msg = `角色名注入无法启动：${problems.join('；')}`;
+      const msg = `角色提词器无法启动：${problems.join('；')}`;
       console.error(TAG, msg);
       toast(msg, 'error');
       return false;
@@ -2169,21 +2730,35 @@
       console.warn(TAG, '检测到另一个实例（可能是新旧版本同时启用），本实例已接管；请到脚本库停用旧版本。');
     }
     host[INSTANCE_KEY] = TOKEN;
-    [PANEL_ID, STYLE_ID, BALL_ID, ENTRY_ID].forEach((id) => {
+    removeOwnNodes();
+    closeModal();
+  }
+
+  /** 清掉自己注入的所有 DOM（含 v1.0.0 用的 rni- 前缀节点，避免新旧版本并存留残骸） */
+  function removeOwnNodes() {
+    const ids = [PANEL_ID, STYLE_ID, BALL_ID, ENTRY_ID, `${ENTRY_ID}-fatal`, MODAL_ID];
+    for (const id of ids) {
       const node = doc.getElementById(id);
       if (node) node.remove();
-    });
-    closeModal();
+    }
+    const legacy = [
+      `${LEGACY_ID_PREFIX}panel`,
+      `${LEGACY_ID_PREFIX}style`,
+      `${LEGACY_ID_PREFIX}ball`,
+      `${LEGACY_ID_PREFIX}entry`,
+      `${LEGACY_ID_PREFIX}entry-fatal`,
+    ];
+    for (const id of legacy) {
+      const node = doc.getElementById(id);
+      if (node) node.remove();
+    }
   }
 
   function uninstall() {
     // eventOn 注册的监听会随脚本关闭自动卸载，这里清理自己注入的 DOM 与页面监听
     clearBallListeners();
     clearPageListeners();
-    [PANEL_ID, STYLE_ID, BALL_ID, ENTRY_ID, `${ENTRY_ID}-fatal`].forEach((id) => {
-      const node = doc.getElementById(id);
-      if (node) node.remove();
-    });
+    removeOwnNodes();
     closeModal();
     if (host[INSTANCE_KEY] === TOKEN) delete host[INSTANCE_KEY];
   }
@@ -2220,7 +2795,7 @@
         try { init(); } catch (e) {
           console.error(TAG, '启动失败', e);
           const msg = e && e.message ? e.message : String(e);
-          toast('角色名注入启动失败：' + msg, 'error');
+          toast('角色提词器启动失败：' + msg, 'error');
           showFatalError(msg);
         }
       });

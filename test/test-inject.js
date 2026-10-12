@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const SRC = path.join(__dirname, '..', 'src', '角色名注入.js');
+const SRC = path.join(__dirname, '..', 'src', '角色提词器.js');
 const source = fs.readFileSync(SRC, 'utf8');
 
 function slice(startMark, endMark) {
