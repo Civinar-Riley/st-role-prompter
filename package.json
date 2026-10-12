@@ -1,0 +1,17 @@
+{
+  "name": "role-name-injector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SillyTavern 角色名注入：悬浮面板管理角色名条目，点击注入输入框并定位光标",
+  "scripts": {
+    "test": "node test/test-parser.js && node test/test-inject.js",
+    "build": "node build.js",
+    "check": "node --check src/角色名注入.js"
+  },
+  "keywords": [
+    "sillytavern",
+    "tavern-helper",
+    "js-slash-runner"
+  ],
+  "license": "MIT"
+}
