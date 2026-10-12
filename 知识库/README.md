@@ -1,0 +1,45 @@
+# 知识库索引
+
+本目录汇总制作「角色名注入」悬浮窗所需的知识，全部来源于本地资料 `D:\Opencode-Work\整理后的SillyTavern资料`，并已核对原始 `.d.ts` 与官方文档，确保 API 签名准确。
+
+> 阅读顺序建议：01 → 02 → 03 → 04 → 05 → 08 → 06 → 07
+
+## 目录
+
+| 文档 | 内容 | 什么时候看 |
+| --- | --- | --- |
+| [01-基础概念与技术选型.md](01-基础概念与技术选型.md) | 酒馆助手脚本 / 前端界面 / 原生插件三种形态的区别，本项目为什么选脚本 | 想搞清楚"我到底该做哪种东西"时 |
+| [02-酒馆助手API参考.md](02-酒馆助手API参考.md) | `TavernHelper` 全局对象全部接口，脚本按钮、事件、变量、消息等 API 签名 | 写代码要查 API 时 |
+| [03-输入框注入方案.md](03-输入框注入方案.md) | **本项目核心**：往 `#send_textarea` 注入文本并控制光标位置的完整方案 | 实现"点击条目注入"时 |
+| [04-数据持久化.md](04-数据持久化.md) | 七种变量作用域、localStorage、版本迁移，条目数据存哪 | 设计"角色名-描述-预设消息"存储时 |
+| [05-UI模式.md](05-UI模式.md) | 悬浮球、悬浮面板、居中弹窗、拖动、主题适配的现成代码骨架 | 做界面时 |
+| [06-酒馆命令手册速查.md](06-酒馆命令手册速查.md) | STscript 命令分类与高频命令（`/setinput`、`/trigger`、`/popup` 等） | 需要走命令通道时 |
+| [07-避坑清单.md](07-避坑清单.md) | 从真实项目踩坑总结的必读规则，出错时先查这里 | 每次写代码前扫一眼 |
+| [08-构建与分发.md](08-构建与分发.md) | 脚本 JSON 封装格式、热更新开发流、jsdelivr 分发 | 准备打包发布时 |
+| [09-参考项目源码摘录.md](09-参考项目源码摘录.md) | 本地两个真实项目 + 社区脚本的可复用代码原文 | 想抄现成实现时 |
+
+## 核心结论速览
+
+1. **技术选型**：做成「酒馆助手脚本」（单文件 JS，贴进酒馆助手脚本库），不做原生插件。理由见 01。
+2. **入口**：`appendInexistentScriptButtons()` + `eventOn(getButtonEvent('按钮名'), cb)` 注册酒馆脚本按钮；另有可拖动悬浮球作为常驻入口。
+3. **注入输入框**：`#send_textarea` 是输入框 id，改 `value` 后必须 `dispatchEvent(new Event('input', {bubbles: true}))`，光标用 `setSelectionRange()` 控制（详见 03）。
+4. **数据存储**：条目数据建议存全局变量 `{type: 'global'}`（跟随用户存档、跨角色卡可用）或脚本变量 `{type: 'script'}`（跟随脚本导出）。
+5. **最高优先级避坑**：所有全局 API 都要 `typeof fn === 'function'` 防御；脚本运行在 iframe 里，操作酒馆页面必须用 `window.parent.document`；初始化前先清理旧实例。
+
+## 资料出处
+
+| 本地路径 | 说明 |
+| --- | --- |
+| `整理后的SillyTavern资料/插件开发/酒馆助手插件开发资料/` | 接口定义 22 个 `.d.ts` + 3 个真实示例脚本 |
+| `整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/` | 青空莉官方模板，含 `@types/` 全量类型与 `util/` 工具 |
+| `整理后的SillyTavern资料/工具与参考/ST资料库/02-酒馆助手JS-Slash-Runner/` | 酒馆助手官方文档源文件（66 篇） |
+| `整理后的SillyTavern资料/制作-角色生成加入世界书/` | 真实完成项目：酒馆助手脚本，含构建脚本 |
+| `整理后的SillyTavern资料/制作-世界书编辑器/` | 真实完成项目：纯前端工具，含 Promise 弹窗模式 |
+
+外部权威来源：
+
+- 酒馆助手官方文档：<https://n0vi028.github.io/JS-Slash-Runner-Doc>
+- 酒馆助手源码：<https://github.com/N0VI028/JS-Slash-Runner>
+- 编写模板（青空莉）：<https://stagedog.github.io/青空莉/工具经验/实时编写前端界面或脚本/>
+- 命令手册：<https://rentry.org/sillytavern-script-book>
+- SillyTavern 源码：<https://github.com/SillyTavern/SillyTavern>
