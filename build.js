@@ -26,17 +26,33 @@ if (!versionMatch) {
   process.exit(1);
 }
 const version = versionMatch[1];
+const scriptName = `角色提词器 v${version}`;
 
-// 脚本 id 保持稳定：首次构建生成，之后复用（避免用户导入后出现两个脚本）
-let scriptId;
-if (fs.existsSync(ID_FILE)) {
-  scriptId = fs.readFileSync(ID_FILE, 'utf8').trim();
-}
-if (!scriptId) {
+/**
+ * 脚本 id 跟着名称走：名称变了就换一个新 id。
+ * 因为名称里带版本号，所以每次发版都是一个全新的脚本 —— 用户更新时需要
+ * 到脚本库把旧版本停用/删掉（两个版本同时启用会被双开保护挡住，但界面上会提示）。
+ *
+ * 这个工具的数据不挂在脚本 id 上（条目存在全局变量和角色卡变量里），
+ * 所以换 id 不会丢数据。
+ */
+let idRecord = { name: '', id: '' };
+try {
+  const raw = fs.readFileSync(ID_FILE, 'utf8').trim();
+  if (raw.startsWith('{')) {
+    idRecord = JSON.parse(raw);
+  } else if (raw) {
+    idRecord = { name: '', id: raw };   // 兼容只存 uuid 的旧格式
+  }
+} catch (e) { /* 首次构建 */ }
+
+let scriptId = idRecord.id;
+if (!scriptId || idRecord.name !== scriptName) {
   scriptId = crypto.randomUUID();
-  fs.writeFileSync(ID_FILE, scriptId, 'utf8');
-  console.log(`已生成脚本 id：${scriptId}`);
+  if (idRecord.name) console.log(`名称已变更：${idRecord.name} → ${scriptName}`);
+  console.log(`生成新脚本 id：${scriptId}`);
 }
+fs.writeFileSync(ID_FILE, JSON.stringify({ name: scriptName, id: scriptId }, null, 2), 'utf8');
 
 const info = [
   `角色提词器 v${version}`,
@@ -84,7 +100,7 @@ const info = [
 const scriptJson = {
   type: 'script',
   enabled: true,
-  name: `角色提词器 v${version}`,
+  name: scriptName,
   id: scriptId,
   content: source,
   info,

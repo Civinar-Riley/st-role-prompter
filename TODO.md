@@ -77,7 +77,7 @@
 
 ## 阶段 6：构建与分发（已完成）
 
-- [x] `build.js` + 版本号单点维护 + 脚本 id 稳定
+- [x] `build.js` + 版本号单点维护 + 脚本 id 跟着名称走（名称变则换新 id，见 README 说明）
 - [x] 测试：纯函数 80 项 + 注入路径 22 项
 - [x] `npm test` / `npm run build` / `npm run check`
 

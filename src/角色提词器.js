@@ -2758,9 +2758,13 @@
     // eventOn 注册的监听会随脚本关闭自动卸载，这里清理自己注入的 DOM 与页面监听
     clearBallListeners();
     clearPageListeners();
-    removeOwnNodes();
+    // 实例令牌已被更新的版本接管时不要动 DOM——那已经是别人的界面了。
+    // 否则用户停用旧版本时，会把新版本的界面一起抹掉。
+    if (host[INSTANCE_KEY] === TOKEN) {
+      removeOwnNodes();
+      delete host[INSTANCE_KEY];
+    }
     closeModal();
-    if (host[INSTANCE_KEY] === TOKEN) delete host[INSTANCE_KEY];
   }
 
   /* ==================== 启动 ==================== */
