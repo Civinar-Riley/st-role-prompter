@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Civinar-Riley
+
 /**
  * 注入路径的端到端测试（用假 DOM，不需要浏览器）。
  *

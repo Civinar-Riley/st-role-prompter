@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Civinar-Riley
+
 /**
  * 弹窗串联的回归测试（用假 DOM 驱动真实弹窗代码）。
  *

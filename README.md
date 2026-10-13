@@ -1,5 +1,7 @@
 # 角色提词器
 
+> 仓库名 `st-role-prompter`　·　SillyTavern（酒馆）的快捷注入面板
+
 给 SillyTavern（酒馆）用的**快捷注入面板**：把常写的角色名、台词格式、Markdown 格式存成条目，**点一下就注入到输入框，光标自动停在你要打字的位置**。
 
 不用再手打角色名，也不用每次都敲一遍引号。
@@ -151,3 +153,13 @@ npm run check   # 语法检查
 - 编写模板（青空莉）：<https://stagedog.github.io/青空莉/工具经验/实时编写前端界面或脚本/>
 - STscript 命令手册：<https://rentry.org/sillytavern-script-book>
 - SillyTavern 源码：<https://github.com/SillyTavern/SillyTavern>
+
+## 许可
+
+**GNU General Public License v3.0**（`GPL-3.0-only`），全文见 [LICENSE](LICENSE)。
+
+简单说：你可以随便用、改、分发，甚至商用；但**分发了修改版就必须同样开源**，不能拿去做闭源版本。这是选 GPL 而不是 MIT 的原因。
+
+> `GPL-3.0-only` 表示"仅 GPL v3"，不自动适用将来可能出现的 GPL v4。
+> 想允许后续版本的话，把各源文件头部的 SPDX 标识和 `package.json` 里的
+> `license` 改成 `GPL-3.0-or-later` 即可，`LICENSE` 文件本身不用动。

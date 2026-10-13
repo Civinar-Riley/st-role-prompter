@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Civinar-Riley
+
 /**
  * 构建脚本：把 src/角色提词器.js 打包成可导入酒馆助手的脚本 JSON。
  *
