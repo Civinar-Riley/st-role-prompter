@@ -4,6 +4,10 @@
 
 类型定义来源：`整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/@types/`，以及 `插件开发/酒馆助手插件开发资料/接口定义/`。
 
+> 这些 `.d.ts` 源自 [JS-Slash-Runner](https://github.com/N0VI028/JS-Slash-Runner) 项目。
+> 本文引用的是**接口签名**（函数名、参数、返回值），属于 API 事实性描述，用于编写兼容代码。
+> 需要完整定义请到上游仓库取。
+
 ---
 
 ## 一、脚本内专有函数（🚫 只能在脚本 iframe 里用）
