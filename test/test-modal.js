@@ -241,6 +241,30 @@ function syncTests() {
     check('替换: 旧弹窗的 onClose 触发了', closed, 1);
     check('替换: 当前是新的那个', modalInfo(state).title, '新');
   }
+
+  // 6. 回归：closeModal 被当作事件处理器直接绑定（`onclick: closeModal`）时，
+  //    第一个参数是 MouseEvent 而不是令牌。不能把它当成令牌而拒绝关闭。
+  {
+    const { fns } = makeEnv();
+    fns.showModal({ title: 'X', buttons: [{ text: '取消' }] });
+    fns.closeModal({ type: 'click', target: {} });
+    check('容错: 事件对象当参数也能关闭', fns.modalOpen(), false);
+  }
+  {
+    const { fns } = makeEnv();
+    fns.showModal({ title: 'X', buttons: [{ text: '取消' }] });
+    fns.closeModal(null);
+    check('容错: null 当参数也能关闭', fns.modalOpen(), false);
+  }
+  // 而真正的数字令牌仍然要能拦住"关错弹窗"
+  {
+    const { fns, state } = makeEnv();
+    fns.showModal({ title: 'A', buttons: [{ text: '确定' }] });
+    const t1 = state.openModalToken;
+    fns.showModal({ title: 'B', buttons: [{ text: '确定' }] });
+    fns.closeModal(t1);
+    check('容错: 数字令牌仍被识别并拦住', fns.modalOpen(), true);
+  }
 }
 
 /* ---------- 异步断言部分 ---------- */
@@ -342,6 +366,58 @@ async function asyncTests() {
       mask.fire('mousedown', { type: 'mousedown', target: mask });
       check('遮罩: 关闭算取消', await p, false);
     }
+  }
+
+  // 10. 回归：异步回调期间禁用按钮，防止双击跑两遍回调
+  //     （双击「保存」会新建出两条条目：「徐渭」和「徐渭 2」）
+  {
+    const { state, fns } = makeEnv();
+    let calls = 0;
+    let release;
+    fns.showModal({
+      title: '编辑',
+      buttons: [
+        { text: '取消' },
+        {
+          text: '保存',
+          primary: true,
+          onClick: () => {
+            calls++;
+            return new Promise((r) => { release = r; });
+          },
+        },
+      ],
+    });
+    const mask = state.openModalEl;
+    const saveBtn = mask.findAll((n) => n.tagName === 'BUTTON').find((b) => b.textContent === '保存');
+    const cancelBtn = mask.findAll((n) => n.tagName === 'BUTTON').find((b) => b.textContent === '取消');
+
+    saveBtn.fire('click');                       // 第一次点击，进入 await
+    check('防重复: 第一次点击后按钮已禁用', saveBtn.disabled, true);
+    check('防重复: 同组按钮也一起禁用', cancelBtn.disabled, true);
+
+    saveBtn.fire('click');                       // 模拟双击
+    check('防重复: 双击只调用一次回调', calls, 1);
+
+    release();                                   // 让回调结束
+    await flush();
+    check('防重复: 完成后按钮恢复可用', saveBtn.disabled, false);
+    check('防重复: 完成后弹窗已关闭', fns.modalOpen(), false);
+  }
+
+  // 11. 回调返回 false 时按钮也要恢复（让用户能重试）
+  {
+    const { state, fns } = makeEnv();
+    fns.showModal({
+      title: 'X',
+      buttons: [{ text: '保存', primary: true, onClick: () => false }],
+    });
+    const mask = state.openModalEl;
+    const btn = mask.findAll((n) => n.tagName === 'BUTTON')[0];
+    btn.fire('click');
+    await flush();
+    check('返回 false: 按钮恢复可用', btn.disabled, false);
+    check('返回 false: 弹窗保持打开', fns.modalOpen(), true);
   }
 }
 

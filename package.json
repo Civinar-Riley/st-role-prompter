@@ -1,6 +1,6 @@
 {
   "name": "role-prompter",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "private": true,
   "description": "角色提词器：SillyTavern 悬浮面板，点条目把角色名/台词格式注入输入框并定位光标",
   "scripts": {

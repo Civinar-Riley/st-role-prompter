@@ -65,6 +65,12 @@ check('标记: 空字符串', F.parseContent(''), { text: '', cursor: 0 });
 check('标记: 只取第一个', F.parseContent('a|b|c'), { text: 'ab|c', cursor: 1 });
 check('标记: 转义竖线', F.parseContent('a\\|b'), { text: 'a|b', cursor: 3 });
 check('标记: 转义后再标记', F.parseContent('a\\|b|c'), { text: 'a|bc', cursor: 3 });
+// 转义规则：源码里 `\\` → 一个反斜杠，`\|` → 一个字面竖线。
+// 所以"光标紧跟反斜杠"要写成 反斜杠+反斜杠+竖线。
+check('标记: 转义反斜杠', F.parseContent('a\\\\b'), { text: 'a\\b', cursor: 3 });
+check('标记: 反斜杠加竖线 = 字面竖线', F.parseContent('C:\\|'), { text: 'C:|', cursor: 3 });
+check('标记: 双反斜杠加竖线 = 反斜杠+光标', F.parseContent('C:\\\\|'), { text: 'C:\\', cursor: 3 });
+check('标记: 路径 + 光标在末尾', F.parseContent('D:\\\\a|'), { text: 'D:\\a', cursor: 4 });
 check('标记: 多行模板', F.parseContent('徐渭：“|”\n（他抬起头）'), { text: '徐渭：“”\n（他抬起头）', cursor: 4 });
 check('标记: null 输入', F.parseContent(null), { text: '', cursor: 0 });
 
@@ -114,6 +120,8 @@ check('默认内容', F.defaultContent('徐渭'), '徐渭：“|”');
 check('默认内容: 空标题', F.defaultContent(''), '：“|”');
 check('默认内容: 标题含竖线要转义', F.defaultContent('A|B'), 'A\\|B：“|”');
 check('默认内容: 转义后解析正确', F.parseContent(F.defaultContent('A|B')).text, 'A|B：“”');
+check('默认内容: 标题含反斜杠', F.parseContent(F.defaultContent('C:\\x')).text, 'C:\\x：“”');
+check('默认内容: 反斜杠+竖线都要转义', F.parseContent(F.defaultContent('a\\|b')).text, 'a\\|b：“”');
 
 /* ---------- normalizeEntry ---------- */
 const norm = F.normalizeEntry({ title: '徐渭' });

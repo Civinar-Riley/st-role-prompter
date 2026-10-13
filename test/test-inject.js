@@ -89,10 +89,12 @@ function makeEnv({ textarea, selectorMiss = false } = {}) {
     },
   };
   const host = { navigator: null };
+  const logs = [];
   return {
     textarea,
     toasts,
     copies,
+    logs,
     sandbox: {
       doc,
       host,
@@ -110,6 +112,10 @@ function makeEnv({ textarea, selectorMiss = false } = {}) {
       RegExp,
       Date,
       toast: (msg, type) => toasts.push({ msg, type }),
+      // 注入切片里会用这三个记日志，测试里收集起来供断言
+      log: (msg) => logs.push({ level: 'info', msg }),
+      logWarn: (msg) => logs.push({ level: 'warn', msg }),
+      logError: (msg) => logs.push({ level: 'error', msg }),
     },
   };
 }
@@ -193,6 +199,8 @@ function check(name, actual, expected) {
   check('降级: 给了提示', env.toasts.length, 1);
   check('降级: 提示类型', env.toasts[0].type, 'warning');
   check('降级: 没有动输入框', ta.value, '');
+  check('降级: 记了一条错误日志', env.logs.filter((l) => l.level === 'error').length, 1);
+  check('降级: 日志说明了试过哪些选择器', /#send_textarea/.test(env.logs[0].msg), true);
 }
 
 /* ---- 6. setSelectionRange 抛错时不崩（预期会打一条 console.error，已静音） ---- */

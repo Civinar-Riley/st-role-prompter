@@ -22,7 +22,7 @@
 
   /* ==================== 常量 ==================== */
 
-  const SCRIPT_VERSION = '1.1.2';
+  const SCRIPT_VERSION = '1.2.0';
   const BUTTON_NAME = '角色提词器';
   const STORE_KEY = '角色提词器';
   // v1.0.0 时叫「角色名注入」，改名的同时把老数据搬过来（读到这里时会自动迁移）
@@ -103,8 +103,12 @@
     let cursor = -1;
     for (let i = 0; i < src.length; i++) {
       const ch = src[i];
-      if (ch === '\\' && src[i + 1] === '|') {
-        out += '|';
+      const next = src[i + 1];
+      // 反斜杠转义：`\\` → `\`，`\|` → `|`。两个都要支持——
+      // 只转义竖线的话，"C:\|"这种内容（反斜杠紧跟光标标记）会被解析成
+      // "C:\" + 字面竖线，光标标记被吞掉。
+      if (ch === '\\' && (next === '|' || next === '\\')) {
+        out += next;
         i++;
         continue;
       }
@@ -164,7 +168,10 @@
 
   /** 新建条目时的默认注入内容（标题里的竖线要转义，否则会被当成光标标记） */
   function defaultContent(title) {
-    const safe = String(title == null ? '' : title).replace(/\|/g, '\\|');
+    // 反斜杠和竖线都要转义，否则标题里的这些字符会被 parseContent 当成转义序列
+    const safe = String(title == null ? '' : title)
+      .replace(/\\/g, '\\\\')
+      .replace(/\|/g, '\\|');
     return `${safe}：“${CURSOR_MARK}”`;
   }
 
@@ -313,9 +320,46 @@
     openModalOnClose: null,
   };
 
-  /* ==================== 小工具 ==================== */
+  /* ==================== 运行日志 ==================== */
 
-  const log = (...args) => console.info(TAG, ...args);
+  // 面板里有一个可展开的日志区，方便用户截图反馈问题。
+  // 只存内存（诊断用，不落盘），环形缓冲，最多 LOG_MAX 条。
+  const LOG_MAX = 200;
+  const logs = [];
+  let logErrorCount = 0;          // 未查看的错误数，用来在按钮上提示
+
+  function pushLog(level, msg) {
+    let time = '';
+    try {
+      time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    } catch (e) {
+      time = '';
+    }
+    logs.push({ time, level, msg: String(msg == null ? '' : msg) });
+    if (logs.length > LOG_MAX) logs.splice(0, logs.length - LOG_MAX);
+    if (level === 'error') logErrorCount++;
+    renderLogs();
+  }
+
+  /** 把 console 风格的参数拼成一行可读文本 */
+  function fmtLogArgs(args) {
+    return args.map((a) => {
+      if (typeof a === 'string') return a;
+      if (a instanceof Error) return `${a.name}: ${a.message}`;
+      if (a === null || a === undefined) return String(a);
+      try {
+        return JSON.stringify(a);
+      } catch (e) {
+        return String(a);
+      }
+    }).join(' ');
+  }
+
+  const log = (...args) => { console.info(TAG, ...args); pushLog('info', fmtLogArgs(args)); };
+  const logWarn = (...args) => { console.warn(TAG, ...args); pushLog('warn', fmtLogArgs(args)); };
+  const logError = (...args) => { console.error(TAG, ...args); pushLog('error', fmtLogArgs(args)); };
+
+  /* ==================== 小工具 ==================== */
 
   function toast(msg, type = 'info') {
     try {
@@ -330,11 +374,11 @@
     try {
       const r = fn(...args);
       if (r && typeof r.then === 'function') {
-        return r.catch((e) => { console.error(TAG, '接口调用失败', e); throw e; });
+        return r.catch((e) => { logError('接口调用失败', e); throw e; });
       }
       return r;
     } catch (e) {
-      console.error(TAG, '接口调用失败', e);
+      logError('接口调用失败', e);
       throw e;
     }
   }
@@ -404,15 +448,23 @@
         // getVariables 按类型定义是同步的。真返回 Promise 说明环境异常，
         // 此时绝不能当成"没有数据"——否则下一次保存会把真实数据整份覆盖掉。
         dataReadFailed = true;
-        console.error(TAG, 'getVariables 意外返回 Promise，已放弃本次读取以保护数据');
+        logError('getVariables 意外返回 Promise，已放弃本次读取以保护数据');
         return pool === 'card' ? null : emptyStore();
       }
       const table = vars || {};
-      let raw = table[STORE_KEY];
-      if (!raw || typeof raw !== 'object') {
+      const rawValue = table[STORE_KEY];
+      // 键存在但类型不对（被别的工具改过、或旧版本双序列化成了字符串）：
+      // 同样不能当成"没有数据"，否则下一次保存会把真实数据整份覆盖掉
+      if (rawValue !== undefined && (rawValue === null || typeof rawValue !== 'object' || Array.isArray(rawValue))) {
+        dataReadFailed = true;
+        logError(`变量「${STORE_KEY}」的类型异常（${Array.isArray(rawValue) ? 'array' : typeof rawValue}），已禁止写盘以防覆盖。请在酒馆助手的变量管理器里检查`);
+        return pool === 'card' ? null : emptyStore();
+      }
+      let raw = rawValue;
+      if (!raw) {
         // 兼容 v1.0.0 的旧键，读到就沿用，等保存成功后清掉
         const legacy = table[LEGACY_STORE_KEY];
-        if (legacy && typeof legacy === 'object') {
+        if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
           raw = legacy;
           legacyKeyUsed[pool] = true;
           log(`检测到旧版数据（键名「${LEGACY_STORE_KEY}」），已自动接管`);
@@ -428,8 +480,13 @@
       if (raw.settings && typeof raw.settings === 'object') store.settings = raw.settings;
       return store;
     } catch (e) {
-      // 没有打开角色卡时，角色卡变量会抛错
-      return pool === 'card' ? null : emptyStore();
+      // 没有打开角色卡时，角色卡变量会抛错——这是正常情况，不是读取失败
+      if (pool === 'card') return null;
+      // 通用池读失败绝不能当成"空数据"：loadAll 之后任何一次保存
+      // （包括拖面板、点条目这类顺带保存）都会把 entries 整份覆盖成空。
+      dataReadFailed = true;
+      logError('读取通用池变量失败，已禁止写盘以防覆盖数据', e);
+      return emptyStore();
     }
   }
 
@@ -438,15 +495,25 @@
    * 用 insertOrAssignVariables（只动自己的键），
    * 绝不能用 replaceVariables——那会整体替换变量表，清掉其他脚本的数据。
    */
-  async function writeStore(pool) {
+  async function writeStore(pool, capturedStore) {
     if (dataReadFailed) {
       toast('保存已阻止：之前的数据读取异常，刷新页面后再试', 'error');
       return false;
     }
     const fn = G('insertOrAssignVariables');
     if (!fn) { toast('保存失败：酒馆助手接口不可用', 'error'); return false; }
+
     const store = pool === 'card' ? cardStore : globalStore;
     if (!store) { toast('保存失败：数据池不可用（可能没有打开角色卡）', 'error'); return false; }
+
+    // 调用方（mutateStore）是在 await 之前捕获 store 并改它的；如果这期间
+    // CHAT_CHANGED 触发了 loadAll()，cardStore/globalStore 已经是新对象——
+    // 此时继续写会把新对象的内容落盘（旧改动从未落盘）却对外报成功。
+    // 所以这里必须校验引用，不一致就作废本次写入。
+    if (capturedStore && capturedStore !== store) {
+      logWarn('数据池已重载（聊天或角色卡切换），本次写入已作废');
+      return false;
+    }
 
     const payload = {
       version: 1,
@@ -468,7 +535,7 @@
       }
       return true;
     } catch (e) {
-      console.error(TAG, '保存失败', e);
+      logError('保存失败', e);
       toast(`保存失败：${e && e.message ? e.message : e}`, 'error');
       return false;
     }
@@ -477,8 +544,15 @@
   // 写盘串行队列：点击条目这类操作是"即发即忘"地保存，
   // 快速连点时如果并发写盘，先发的旧数据可能后落盘，把新数据盖掉。
   let saveChain = Promise.resolve();
-  function saveStore(pool) {
-    const run = saveChain.then(() => writeStore(pool), () => writeStore(pool));
+  /**
+   * @param {'global'|'card'} pool
+   * @param {object} [capturedStore] 改动发生在这个 store 上；传了就校验它是否还是当前池
+   */
+  function saveStore(pool, capturedStore) {
+    const run = saveChain.then(
+      () => writeStore(pool, capturedStore),
+      () => writeStore(pool, capturedStore),
+    );
     saveChain = run.then(() => {}, () => {});
     return run;
   }
@@ -513,13 +587,16 @@
     try {
       mutator(live);
     } catch (e) {
-      console.error(TAG, '改动数据出错', e);
+      logError('改动数据出错', e);
       rollback();
       toast('操作失败：' + (e && e.message ? e.message : e), 'error');
       return { ok: false, reason: 'mutator-error' };
     }
 
-    const ok = await saveStore(pool);
+    // 把捕获的 store 传下去：写盘时会校验它是否还是当前池。
+    // 若这期间切了聊天/角色卡（loadAll 换了对象），写盘会作废并返回失败，
+    // 我们据此回滚内存，用户看到的是"失败"而不是假的"已保存"。
+    const ok = await saveStore(pool, live);
     if (!ok) {
       rollback();
       return { ok: false, reason: 'save-failed' };
@@ -605,6 +682,7 @@
     const ta = findSendTextarea();
     if (!ta) {
       const ok = copyToClipboard(text);
+      logError(`未找到酒馆输入框（试过 #send_textarea / #nonQRFormItems / #send_form / #form_sheld），${ok ? '已复制到剪贴板' : '复制也失败'}`);
       toast(ok ? '未找到输入框，已复制到剪贴板' : '未找到输入框，注入失败', ok ? 'warning' : 'error');
       return false;
     }
@@ -623,7 +701,7 @@
       }
       return true;
     } catch (e) {
-      console.error(TAG, '注入失败', e);
+      logError('注入失败', e);
       toast('注入失败：' + (e && e.message ? e.message : e), 'error');
       return false;
     }
@@ -634,12 +712,17 @@
   function injectEntry(entry) {
     if (!entry) return;
     const parsed = parseContent(entry.content);
-    if (!parsed.text) { toast('这个条目还没有注入内容', 'warning'); return; }
+    if (!parsed.text) {
+      logWarn(`条目「${entry.title}」没有注入内容，已跳过`);
+      toast('这个条目还没有注入内容', 'warning');
+      return;
+    }
 
+    const mode = settings.injectMode;
     const ok = injectToInputBox(
       parsed.text,
       parsed.cursor,
-      settings.injectMode,
+      mode,
       SEPARATOR_MAP[settings.appendSeparator],
     );
     if (!ok) return;
@@ -648,6 +731,7 @@
     entry.lastUsedAt = Date.now();
     saveStore(state.pool);
 
+    log(`注入「${entry.title || '（无标题）'}」：模式=${mode}，光标=${parsed.cursor}，内容=${JSON.stringify(parsed.text)}`);
     setStatus(`已注入：${entry.title || '（无标题）'}`);
     if (settings.autoCloseAfterInject) closePanel();
   }
@@ -760,18 +844,46 @@
 }
 
 #${PANEL_ID} .rpt-foot {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 7px 10px; border-top: 1px solid var(--rpt-border);
   font-size: 12px; color: var(--rpt-muted);
 }
-#${PANEL_ID} .rpt-status { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#${PANEL_ID} .rpt-status { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 60px; }
 #${PANEL_ID} .rpt-foot .rpt-btn { flex: 0 0 auto; }
+#${PANEL_ID} .rpt-btn.rpt-btn-danger {
+  background: var(--rpt-danger); border-color: transparent; color: #fff;
+}
+
+#${PANEL_ID} .rpt-collapsed { display: none; }
+
+#${PANEL_ID} .rpt-logs {
+  flex: 0 0 auto; border-top: 1px solid var(--rpt-border);
+  background: var(--rpt-card);
+  max-height: 220px; display: flex; flex-direction: column;
+}
+#${PANEL_ID} .rpt-logs-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; font-size: 12px; color: var(--rpt-muted);
+}
+#${PANEL_ID} .rpt-logs-title { flex: 1 1 auto; font-weight: 600; }
+#${PANEL_ID} .rpt-logs-head .rpt-btn { font-size: 11px; padding: 2px 8px; }
+#${PANEL_ID} .rpt-logs-body {
+  overflow-y: auto; padding: 0 10px 8px;
+  font: 11.5px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+#${PANEL_ID} .rpt-log { display: flex; gap: 6px; padding: 1px 0; word-break: break-word; }
+#${PANEL_ID} .rpt-log-time { flex: 0 0 auto; color: var(--rpt-muted); }
+#${PANEL_ID} .rpt-log-msg { flex: 1 1 auto; min-width: 0; }
+#${PANEL_ID} .rpt-log-warn .rpt-log-msg { color: #d9a441; }
+#${PANEL_ID} .rpt-log-error .rpt-log-msg { color: var(--rpt-danger); }
+#${PANEL_ID} .rpt-log-empty { color: var(--rpt-muted); }
 
 #${PANEL_ID} .rpt-btn {
   padding: 4px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
   background: var(--rpt-card); color: var(--rpt-fg); border: 1px solid var(--rpt-border);
 }
 #${PANEL_ID} .rpt-btn:hover { background: var(--rpt-hover); }
+#${PANEL_ID} .rpt-btn:disabled { opacity: .5; cursor: default; }
 #${PANEL_ID} .rpt-btn.rpt-primary { background: var(--rpt-accent); border-color: transparent; color: #fff; }
 #${PANEL_ID} .rpt-btn.rpt-danger { background: var(--rpt-danger); border-color: transparent; color: #fff; }
 
@@ -858,6 +970,7 @@
   background: var(--rpt-card); color: var(--rpt-fg); border: 1px solid var(--rpt-border);
 }
 .rpt-modal .rpt-btn:hover { background: var(--rpt-hover); }
+.rpt-modal .rpt-btn:disabled { opacity: .5; cursor: default; }
 .rpt-modal .rpt-btn.rpt-primary { background: var(--rpt-accent); border-color: transparent; color: #fff; }
 .rpt-modal .rpt-btn.rpt-danger { background: var(--rpt-danger); border-color: transparent; color: #fff; }
 .rpt-modal .rpt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -970,6 +1083,7 @@
 
     const actions = el('div', { class: 'rpt-actions' });
     const buttonList = buttons || [];
+    const btnEls = [];
     for (const b of buttonList) {
       const btn = el('button', {
         class: `rpt-btn${b.primary ? ' rpt-primary' : ''}${b.danger ? ' rpt-danger' : ''}`,
@@ -977,17 +1091,26 @@
         type: 'button',
       });
       btn.addEventListener('click', async () => {
+        // 异步回调期间禁用整组按钮：否则双击「保存」会跑两遍回调，
+        // 新建条目时就会生成两条（"徐渭" 和 "徐渭 2"）
+        if (btn.disabled) return;
+        for (const s of btnEls) s.disabled = true;
         let ok = true;
-        if (b.onClick) {
-          try {
+        try {
+          if (b.onClick) {
             ok = (await b.onClick()) !== false;
-          } catch (e) {
-            console.error(TAG, '弹窗按钮回调出错', e);
-            ok = false;
           }
+        } catch (e) {
+          logError('弹窗按钮回调出错', e);
+          ok = false;
+        } finally {
+          // 回调里可能已经把这个弹窗换掉了（如导入流程），
+          // 恢复 detached 按钮的状态无害，所以不做额外判断
+          for (const s of btnEls) s.disabled = false;
         }
         if (ok !== false) closeModal(token);
       });
+      btnEls.push(btn);
       actions.appendChild(btn);
     }
     // 按钮为空时不渲染操作行（面板自带操作行的弹窗用这个分支）
@@ -1008,6 +1131,9 @@
    * @param {number} [token] 只关这一个；不传则关当前弹窗（用于"替换"场景）
    */
   function closeModal(token) {
+    // 容错：closeModal 有时被当作事件处理器直接绑定（`onclick: closeModal`），
+    // 那样第一个参数是 MouseEvent 而不是令牌。不认成令牌，按"关当前弹窗"处理。
+    if (typeof token !== 'number') token = undefined;
     if (!state.openModalEl) return;
     if (token !== undefined && token !== state.openModalToken) return;
     const cb = state.openModalOnClose;
@@ -1081,8 +1207,21 @@
 
     const list = el('div', { class: 'rpt-list' });
 
+    // 运行日志区：默认折叠，排查问题时展开，可复制给作者
+    const logBox = el('div', { class: 'rpt-logs rpt-collapsed' }, [
+      el('div', { class: 'rpt-logs-head' }, [
+        el('span', { class: 'rpt-logs-title', text: '运行日志' }),
+        el('button', { class: 'rpt-btn', text: '复制', dataset: { act: 'copyLogs' }, type: 'button' }),
+        el('button', { class: 'rpt-btn', text: '清空', dataset: { act: 'clearLogs' }, type: 'button' }),
+      ]),
+      el('div', { class: 'rpt-logs-body' }),
+    ]);
+
+    const logBtn = el('button', { class: 'rpt-btn', text: '日志', dataset: { act: 'toggleLogs' }, type: 'button' });
+
     const foot = el('div', { class: 'rpt-foot' }, [
       el('span', { class: 'rpt-status', text: '就绪' }),
+      logBtn,
       el('button', { class: 'rpt-btn', text: '预设库', dataset: { act: 'library' }, type: 'button' }),
       el('button', { class: 'rpt-btn', text: '批量导入', dataset: { act: 'import' }, type: 'button' }),
     ]);
@@ -1090,6 +1229,7 @@
     panel.appendChild(head);
     panel.appendChild(searchRow);
     panel.appendChild(list);
+    panel.appendChild(logBox);
     panel.appendChild(foot);
     doc.body.appendChild(panel);
 
@@ -1118,6 +1258,16 @@
       else if (act === 'library') openLibraryDialog();
       else if (act === 'settings') openSettings();
       else if (act === 'close') closePanel();
+      else if (act === 'toggleLogs') toggleLogs();
+      else if (act === 'copyLogs') {
+        copyToClipboard(logsToText());
+        setStatus('日志已复制到剪贴板');
+        toast('日志已复制', 'success');
+      } else if (act === 'clearLogs') {
+        logs.length = 0;
+        logErrorCount = 0;
+        pushLog('info', '日志已清空');
+      }
     };
 
     head.addEventListener('click', (e) => {
@@ -1126,6 +1276,11 @@
     });
 
     foot.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (btn) handleAct(btn.dataset.act);
+    });
+
+    logBox.querySelector('.rpt-logs-head').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-act]');
       if (btn) handleAct(btn.dataset.act);
     });
@@ -1247,6 +1402,82 @@
     if (!panel) return;
     const node = panel.querySelector('.rpt-status');
     if (node) node.textContent = text;
+  }
+
+  /**
+   * 重绘日志区。会在任何时刻被 pushLog 调用（包括面板还没建的时候），
+   * 所以这里必须容忍"节点不存在"。
+   */
+  function renderLogs() {
+    const panel = doc.getElementById(PANEL_ID);
+    if (!panel) return;
+    const body = panel.querySelector('.rpt-logs-body');
+    if (!body) return;
+
+    // 只渲染尾部若干条，避免日志长了之后每次重绘都卡
+    const shown = logs.slice(-80);
+    const frag = doc.createDocumentFragment();
+    for (const entry of shown) {
+      frag.appendChild(el('div', { class: `rpt-log rpt-log-${entry.level}` }, [
+        el('span', { class: 'rpt-log-time', text: entry.time }),
+        el('span', { class: 'rpt-log-msg', text: entry.msg }),
+      ]));
+    }
+    body.textContent = '';
+    if (!shown.length) {
+      body.appendChild(el('div', { class: 'rpt-log rpt-log-empty', text: '（还没有日志）' }));
+    } else {
+      body.appendChild(frag);
+      body.scrollTop = body.scrollHeight;   // 滚到底部看最新
+    }
+
+    // 有未查看的错误时，把「日志」按钮标红
+    const btn = panel.querySelector('[data-act="toggleLogs"]');
+    if (btn) {
+      const hasErr = logErrorCount > 0;
+      btn.classList.toggle('rpt-btn-danger', hasErr);
+      btn.textContent = hasErr ? `日志 (${logErrorCount})` : '日志';
+    }
+  }
+
+  /** 把日志拼成可粘贴的纯文本 */
+  function logsToText() {
+    const header = [
+      `角色提词器 v${SCRIPT_VERSION}`,
+      `导出时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+      `环境：SillyTavern ${safeVersion('getTavernVersion')} / 酒馆助手 ${safeVersion('getTavernHelperVersion')}`,
+      `条目：本卡 ${cardStore ? cardStore.entries.length : '不可用'} 条，通用 ${globalStore ? globalStore.entries.length : '?'} 条`,
+      `设置：注入方式=${settings.injectMode}，分隔符=${settings.appendSeparator}，自动收起=${settings.autoCloseAfterInject}`,
+      `日志 ${logs.length} 条：`,
+      '',
+    ].join('\n');
+    return header + logs.map((e) => `[${e.time}] [${e.level}] ${e.msg}`).join('\n');
+  }
+
+  function safeVersion(fnName) {
+    try {
+      const fn = G(fnName);
+      return fn ? (fn() || '未知') : '未知';
+    } catch (e) {
+      return '未知';
+    }
+  }
+
+  function toggleLogs() {
+    const panel = doc.getElementById(PANEL_ID);
+    if (!panel) return;
+    const box = panel.querySelector('.rpt-logs');
+    if (!box) return;
+    const collapsed = box.classList.toggle('rpt-collapsed');
+    if (!collapsed) {
+      logErrorCount = 0;         // 展开就算看过了
+      renderLogs();
+    }
+    // 展开后重新夹一下面板位置，避免超出视口
+    const p = doc.getElementById(PANEL_ID);
+    if (p && !collapsed) {
+      p.style.top = clamp(parseFloat(p.style.top) || 8, 8, Math.max(8, host.innerHeight - p.offsetHeight - 8)) + 'px';
+    }
   }
 
   function applyPanelPosition() {
@@ -1719,7 +1950,7 @@
       };
 
       const actions = el('div', { class: 'rpt-actions' }, [
-        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: closeModal }),
+        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: () => closeModal() }),
         el('button', {
           class: 'rpt-btn rpt-primary', text: '导入', type: 'button',
           onclick: async (e) => {
@@ -1825,7 +2056,7 @@
             if (binds && Array.isArray(binds.additional)) names.push(...binds.additional);
           }
         } catch (e) {
-          console.error(TAG, '读取角色卡世界书绑定失败', e);
+          logError('读取角色卡世界书绑定失败', e);
         }
 
         if (includeGlobalLabel.querySelector('input').checked && fnGlobal) {
@@ -1841,7 +2072,16 @@
           return;
         }
 
-        const imported = store.importedWorldbookEntries || {};
+        // "已导入过"以池里真实存在的条目为准，而不是只看 importedWorldbookEntries 那份记录：
+        // 那份记录在删除/改名条目时不会跟着清理，只信它会导致删掉的条目永远无法再导入。
+        const imported = {};
+        for (const e of store.entries) {
+          const src = e.source;
+          if (src && src.type === 'worldbook' && src.worldbook && src.entryName) {
+            (imported[src.worldbook] = imported[src.worldbook] || []).push(src.entryName);
+          }
+        }
+
         const collected = [];
         for (const wbName of uniq) {
           try {
@@ -1850,7 +2090,7 @@
             const cands = worldbookCandidates(list, imported[wbName] || [], '');
             for (const c of cands) collected.push({ ...c, worldbook: wbName });
           } catch (e) {
-            console.error(TAG, `读取世界书「${wbName}」失败`, e);
+            logError(`读取世界书「${wbName}」失败`, e);
           }
         }
 
@@ -1867,7 +2107,7 @@
       });
 
       const actions = el('div', { class: 'rpt-actions' }, [
-        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: closeModal }),
+        el('button', { class: 'rpt-btn', text: '取消', type: 'button', onclick: () => closeModal() }),
         el('button', {
           class: 'rpt-btn rpt-primary', text: '导入所选', type: 'button',
           onclick: async (e) => {
@@ -2140,10 +2380,17 @@
       settings.autoCloseAfterInject = autoClose.checked;
       settings.showFloatingBall = showBall.checked;
       settings.theme = themeSelect.value;
-      await saveStore('global');
+      // settings 是模块级单例，改动已经落在内存里了；写盘失败必须如实报错，
+      // 否则用户看到"已保存"，重载后设置又变回去。
+      const ok = await saveStore('global');
+      if (!ok) {
+        setStatus('设置保存失败');
+        return false;                 // 保持弹窗打开，让用户重试
+      }
       buildBall();
       const panel = doc.getElementById(PANEL_ID);
       if (panel) applyTheme(panel);
+      log(`设置已保存：注入方式=${settings.injectMode}，分隔符=${settings.appendSeparator}，自动收起=${settings.autoCloseAfterInject}，悬浮球=${settings.showFloatingBall}，配色=${settings.theme}`);
       setStatus('设置已保存');
       return true;
     };
@@ -2515,17 +2762,24 @@
         const p = plan(which);
         let added = 0;
         let replaced = 0;
-        let failed = false;
+
+        // 在任何 await 之前把两个池的引用捕获下来。之前这里是"取出后立刻和自己比"，
+        // 恒为真、形同虚设——切了聊天之后循环里重新取到的已经是新卡，守卫照样放行，
+        // 导入结果会落进新角色卡，而 CHAT_CHANGED 那边还弹过"操作已取消"。
+        const captured = { global: globalStore, card: cardStore };
 
         for (const pool of ['global', 'card']) {
           const list = p[pool];
           if (!list.length) continue;
-          const store = pool === 'card' ? cardStore : globalStore;
-          if (!store || !storeStillValid(pool, store)) { failed = true; break; }
+          if (!storeStillValid(pool, captured[pool])) return false;
 
           // eslint-disable-next-line no-await-in-loop
           const res = await mutateStore(pool, (live) => {
             for (const entry of list) {
+              // 文件里的 id 可能与池里已有条目重复（手改过或第三方拼接）。
+              // 重了会让两条条目在界面上不可区分，点击永远命中第一条。
+              if (live.entries.some((x) => x.id === entry.id)) entry.id = newId();
+
               const idx = live.entries.findIndex((x) => x.title === entry.title);
               if (idx < 0) {
                 live.entries.push(entry);
@@ -2546,15 +2800,16 @@
               }
             }
           });
-          if (!res.ok) { failed = true; break; }
+          if (!res.ok) {
+            toast('导入已中止：数据池被切换或保存失败', 'error');
+            return false;
+          }
         }
 
-        if (!failed) {
-          renderAll();
-          setStatus(`导入完成：新增 ${added}，覆盖 ${replaced}`);
-          toast(`导入完成：新增 ${added}，覆盖 ${replaced}`, 'success');
-        }
-        return !failed;
+        renderAll();
+        setStatus(`导入完成：新增 ${added}，覆盖 ${replaced}`);
+        toast(`导入完成：新增 ${added}，覆盖 ${replaced}`, 'success');
+        return true;
       };
 
       renderPlan();
@@ -2627,7 +2882,7 @@
       entry.style.cssText += 'position:fixed;right:12px;bottom:12px;z-index:99990;background:rgba(15,23,42,.92);border-radius:50%;color:#fff;';
       doc.body.appendChild(entry);
     } catch (e) {
-      console.error(TAG, '注入入口按钮失败', e);
+      logError('注入入口按钮失败', e);
     }
   }
 
@@ -2743,7 +2998,7 @@
 
     if (problems.length) {
       const msg = `角色提词器无法启动：${problems.join('；')}`;
-      console.error(TAG, msg);
+      logError(msg);
       toast(msg, 'error');
       return false;
     }
@@ -2824,7 +3079,7 @@
     if (typeof $ === 'function') {
       $(() => {
         try { init(); } catch (e) {
-          console.error(TAG, '启动失败', e);
+          logError('启动失败', e);
           const msg = e && e.message ? e.message : String(e);
           toast('角色提词器启动失败：' + msg, 'error');
           showFatalError(msg);
@@ -2834,11 +3089,11 @@
       throw new Error('jQuery 不可用');
     }
   } catch (e) {
-    console.error(TAG, '启动失败', e);
+    logError('启动失败', e);
     // 兜底：直接在页面就绪后启动
     const boot = () => {
       try { init(); } catch (e2) {
-        console.error(TAG, e2);
+        logError('启动失败', e2);
         showFatalError(e2 && e2.message ? e2.message : String(e2));
       }
     };
