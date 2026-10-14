@@ -2,7 +2,7 @@
 
 所有接口挂在 `window.TavernHelper` 上；**同时函数本身也直接暴露为全局函数**，所以脚本里可以直接写 `getChatMessages(...)`、`triggerSlash(...)`，不必加 `TavernHelper.` 前缀。
 
-类型定义来源：`整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/@types/`，以及 `插件开发/酒馆助手插件开发资料/接口定义/`。
+类型定义来源：[tavern_helper_template](https://github.com/StageDog/tavern_helper_template) 的 `@types/` 目录。
 
 > 这些 `.d.ts` 源自 [JS-Slash-Runner](https://github.com/N0VI028/JS-Slash-Runner) 项目。
 > 本文引用的是**接口签名**（函数名、参数、返回值），属于 API 事实性描述，用于编写兼容代码。
@@ -458,8 +458,7 @@ declare function getAllEnabledScriptButtons(): { [script_id: string]: { button_i
 
 ## 十一、类型定义原文在哪
 
-需要精确签名时直接查这些文件（本地已有一份完整拷贝）：
+需要精确签名时，去 [tavern_helper_template](https://github.com/StageDog/tavern_helper_template) 的 `@types/` 里查：
 
-- `整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/@types/function/`（22 个 `.d.ts`，对应 `window.TavernHelper` 成员）
-- `整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/@types/iframe/`（`event.d.ts`、`script.d.ts`、`util.d.ts`、`variables.d.ts` 等，只能在脚本/前端界面内用）
-- `整理后的SillyTavern资料/插件开发/酒馆助手插件开发资料/接口定义/`（同内容的另一份拷贝）
+- `@types/function/`（22 个 `.d.ts`，对应 `window.TavernHelper` 成员）
+- `@types/iframe/`（`event.d.ts`、`script.d.ts`、`util.d.ts`、`variables.d.ts` 等，只能在脚本/前端界面内用）

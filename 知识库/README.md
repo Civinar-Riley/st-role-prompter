@@ -1,23 +1,23 @@
 # 知识库索引
 
-本目录汇总制作「角色提词器」所需的知识，来源是本地资料 `D:\Opencode-Work\整理后的SillyTavern资料`，
-并已核对原始 `.d.ts` 与官方文档，确保 API 签名准确。
+本目录汇总制作「角色提词器」所需的知识：酒馆助手与 SillyTavern 的官方文档、类型定义、
+官方源码，以及公开的社区文档。API 签名都已核对过原始 `.d.ts`，确保准确。
 
 > 阅读顺序建议：01 → 02 → 03 → 04 → 05 → 08 → 06 → 07
 
 ## 版权与出处
 
-本知识库的内容都基于**公开资料**整理：酒馆助手与 SillyTavern 的官方文档、类型定义、官方源码，
-以及公开的社区文档。**不含任何第三方作品的代码摘录。**
+本知识库的内容都基于**公开资料**整理，**不含任何第三方作品的代码摘录**。
 
-引用酒馆助手接口签名时，出处是 [JS-Slash-Runner](https://github.com/N0VI028/JS-Slash-Runner) 的
-`@types/` 类型定义与官方文档；SillyTavern 的机制描述出自其[官方源码](https://github.com/SillyTavern/SillyTavern)，
-核实版本 1.19.0（见 [09-输入框机制源码核实.md](09-输入框机制源码核实.md)）。
+- 酒馆助手接口签名：[JS-Slash-Runner](https://github.com/N0VI028/JS-Slash-Runner) 的 `@types/` 类型定义与官方文档
+- SillyTavern 机制描述：[官方源码](https://github.com/SillyTavern/SillyTavern)，核实版本 1.19.0
+  （见 [09-输入框机制源码核实.md](09-输入框机制源码核实.md)）
+- 编写模板与工具：[tavern_helper_template](https://github.com/StageDog/tavern_helper_template)
 
 ## 目录
 
-> 说明：01-08 提炼自本地资料 `整理后的SillyTavern资料`（2025 年 8-9 月整理）；
-> 10 是 2026-10-12 直接拉取 SillyTavern 官方源码核实的补充。两者若有冲突以 10 为准。
+> 说明：01-08 提炼自上述公开资料；09 是直接拉取 SillyTavern 官方源码核实的补充，
+> 两者若有冲突以 09 为准。
 
 | 文档 | 内容 | 什么时候看 |
 | --- | --- | --- |
@@ -41,13 +41,15 @@
 
 ## 资料出处
 
-| 本地路径 | 说明 |
-| --- | --- |
-| `整理后的SillyTavern资料/插件开发/酒馆助手插件开发资料/` | 接口定义 22 个 `.d.ts` |
-| `整理后的SillyTavern资料/模板与示例/tavern_helper_template-main/` | 青空莉官方模板，含 `@types/` 全量类型与 `util/` 工具 |
-| `整理后的SillyTavern资料/工具与参考/ST资料库/02-酒馆助手JS-Slash-Runner/` | 酒馆助手官方文档源文件（66 篇） |
+全部来自下面这些公开来源：
 
-外部权威来源：
+| 来源 | 用到了什么 |
+| --- | --- |
+| [JS-Slash-Runner](https://github.com/N0VI028/JS-Slash-Runner) | 接口定义 22 个 `.d.ts`、官方文档 66 篇 |
+| [tavern_helper_template](https://github.com/StageDog/tavern_helper_template) | `@types/` 全量类型定义、`util/` 工具、`slash_command.txt` |
+| [SillyTavern](https://github.com/SillyTavern/SillyTavern) | 输入框机制的源码核实（版本 1.19.0） |
+
+权威入口：
 
 - 酒馆助手官方文档：<https://n0vi028.github.io/JS-Slash-Runner-Doc>
 - 酒馆助手源码：<https://github.com/N0VI028/JS-Slash-Runner>
