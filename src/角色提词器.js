@@ -22,7 +22,7 @@
 
   /* ==================== 常量 ==================== */
 
-  const SCRIPT_VERSION = '1.2.0';
+  const SCRIPT_VERSION = '1.2.1';
   const BUTTON_NAME = '角色提词器';
   const STORE_KEY = '角色提词器';
   // v1.0.0 时叫「角色名注入」，改名的同时把老数据搬过来（读到这里时会自动迁移）
@@ -854,7 +854,11 @@
   background: var(--rpt-danger); border-color: transparent; color: #fff;
 }
 
-#${PANEL_ID} .rpt-collapsed { display: none; }
+/* 折叠工具类。必须带 !important：
+   它和被折叠元素的样式优先级相同（都是 1 个 id + 1 个 class），谁写在后面谁赢。
+   之前没加 !important，而 .rpt-logs 恰好写在它后面且设了 display: flex，
+   于是折叠类名加上了也看不到效果——日志区展开后关不掉。 */
+#${PANEL_ID} .rpt-collapsed { display: none !important; }
 
 #${PANEL_ID} .rpt-logs {
   flex: 0 0 auto; border-top: 1px solid var(--rpt-border);

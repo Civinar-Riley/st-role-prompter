@@ -1,10 +1,10 @@
 {
   "name": "role-prompter",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "角色提词器：SillyTavern 悬浮面板，点条目把角色名/台词格式注入输入框并定位光标",
   "scripts": {
-    "test": "node test/test-parser.js && node test/test-inject.js && node test/test-modal.js",
+    "test": "node test/test-parser.js && node test/test-inject.js && node test/test-modal.js && node test/test-css.js",
     "build": "node build.js",
     "check": "node --check src/角色提词器.js"
   },
